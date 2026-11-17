@@ -1,0 +1,57 @@
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#f4fbf0;color:#222;display:flex;flex-direction:column;min-height:100vh}
+header{display:flex;align-items:center;gap:10px;background:#58a322;color:#fff;padding:10px 14px}
+.logo{font-size:30px}.appname{font-size:19px;font-weight:700;line-height:1.1}.tagline{font-size:13px;opacity:.95}.status{font-size:12px;opacity:.9}
+.hbtn{margin-left:auto;background:#fff;color:#3d7a12;border:0;border-radius:18px;padding:7px 12px;font-weight:600}
+section,footer{background:#fff;margin:8px;padding:10px 12px;border-radius:12px}
+.row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}.between{justify-content:space-between}
+button{cursor:pointer;border-radius:8px;border:1px solid #cfe3bb;padding:8px 12px;background:#fff}
+button.primary{background:#58a322;color:#fff;border-color:#58a322;font-weight:700}
+button.ghost{background:#eef7e4}button.small{padding:4px 8px;font-size:12px}button.danger{color:#b3261e}
+input,select,textarea{border:1px solid #ccd6c2;border-radius:8px;padding:8px;font-size:14px}
+textarea{flex:1;resize:vertical}
+.hint{color:#667;font-size:13px;line-height:1.5}.hidden{display:none!important}
+.tag{background:#fff3cd;border-radius:6px;padding:1px 6px;font-size:12px}
+.panelTitle{font-weight:700;margin:4px 0 6px}
+/* --- host hero: QR front and center --- */
+#hostHero{text-align:center;padding:18px 14px}
+.heroTitle{margin:2px 0 12px;font-size:19px}
+#heroQrBox{display:flex;justify-content:center}
+#heroQrBox svg{width:min(320px,82vw);height:auto}
+.heroRoom{font-size:17px;margin:12px 0 4px}
+.joinUrlRow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin:6px 0}
+.joinUrl{font-size:11px;color:#888;word-break:break-all;max-width:520px;text-align:left}
+.switchRow{display:flex;gap:9px;align-items:flex-start;text-align:left;background:#f4fbf0;border:1px solid #dcebcc;border-radius:10px;padding:10px 12px;margin:12px auto;max-width:560px;font-size:13px;line-height:1.55;cursor:pointer}
+.switchRow input{width:20px;height:20px;flex:none;margin-top:1px;accent-color:#58a322}
+/* --- trusted devices + join banner --- */
+#trustedList{list-style:none;margin:6px 0;padding:0}
+#trustedList li{display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #eef2e6;flex-wrap:wrap}
+#joinBanner{background:#eef7e4;border:1px solid #cfe3bb}
+#joinBannerText{font-weight:600;margin-bottom:4px}
+#reconnectBar{background:#fff8e1;border:1px solid #ffe082;text-align:center}
+/* --- devices --- */
+#deviceList{list-style:none;margin:6px 0;padding:0}
+#deviceList li{display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #eef2e6;flex-wrap:wrap}
+#deviceList li.offline{opacity:.5}
+.dot{width:10px;height:10px;border-radius:50%;background:#bbb;flex:none}.dot.on{background:#38b000}
+.avatar{width:28px;height:28px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex:none}
+.selfTag{background:#58a322;color:#fff;font-size:11px;border-radius:6px;padding:1px 5px}
+.trustTag{background:#2471a3;color:#fff;font-size:11px;border-radius:6px;padding:1px 5px}
+.offTag{background:#999;color:#fff;font-size:11px;border-radius:6px;padding:1px 5px}
+/* --- messages --- */
+#messages{flex:1;background:transparent;margin:0 8px;padding:4px;overflow-y:auto}
+.msg{max-width:88%;margin:8px 0;padding:8px 10px;border-radius:12px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.msg.mine{margin-left:auto;background:#dff3c8}
+.msg .meta{font-size:12px;color:#777;margin-bottom:4px;display:flex;gap:6px;align-items:center}
+.msg img.preview{max-width:260px;max-height:260px;border-radius:8px;display:block;margin-top:6px}
+.msg a.dl{color:#2f6f0e;font-weight:600}
+.msg .txt{white-space:pre-wrap;word-break:break-all}
+.chip{font-size:11px;color:#fff;border-radius:8px;padding:1px 6px}
+.progress{height:8px;background:#e5ecd9;border-radius:4px;overflow:hidden;margin-top:6px}
+.progress>i{display:block;height:100%;background:#58a322;width:0}
+.fileBtn{background:#eef7e4;border:1px solid #cfe3bb;border-radius:8px;padding:8px 10px;cursor:pointer}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9}
+.modal .card{background:#fff;border-radius:14px;padding:18px;max-width:92vw;text-align:center}
+#qrBox svg{width:240px;height:240px}
+#scanVideo{width:300px;max-width:80vw;border-radius:10px;background:#000}
+footer{margin-top:auto;position:sticky;bottom:0}
