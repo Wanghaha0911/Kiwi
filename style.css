@@ -72,7 +72,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
 #hostHero{background:var(--panel);border:1px solid var(--border);border-radius:18px;box-shadow:0 6px 24px rgba(60,80,40,.09);text-align:center;padding:22px 20px;max-width:600px;margin:0 auto}
 .heroTitle{margin:0 0 14px;font-size:19px;color:var(--brown)}
 #heroQrBox{display:flex;justify-content:center}
-#heroQrBox svg{width:min(300px,80vw);height:auto}
+#heroQrBox svg{width:min(200px,80vw);height:auto}
 .heroRoom{font-size:17px;margin:13px 0 4px}
 .heroRoom b{letter-spacing:1px}
 .joinUrlRow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin:6px 0}
@@ -132,12 +132,14 @@ body.hasPeers #hostHero{display:none}
 .mobileBrand{font-size:16.5px;font-weight:700;color:var(--brown)}
 .mobileDot{width:9px;height:9px;border-radius:50%;background:#bbb}
 body.hasPeers .mobileDot{background:#58b531}
-#drawerBackdrop{position:fixed;inset:0;background:rgba(38,45,32,.45);z-index:30}
+#drawerBackdrop{position:fixed;inset:0;background:rgba(38,45,32,.30);-webkit-backdrop-filter:brightness(.6);backdrop-filter:brightness(.6);z-index:30;opacity:0;pointer-events:none;transition:opacity .25s ease}
+body.drawerOpen #drawerBackdrop{opacity:1;pointer-events:auto}
 @media (max-width:699px){
   #sidebar{position:fixed;top:0;left:0;width:min(320px,86vw);height:100dvh;z-index:40;transform:translateX(-105%);transition:transform .25s ease;display:flex;flex-direction:column;overflow-y:auto;border-bottom:0;border-right:1px solid var(--border)}
   body.drawerOpen #sidebar{transform:none;box-shadow:10px 0 34px rgba(40,50,30,.28)}
   .sideFoot{margin-top:auto;padding-top:14px}
   #qrBox svg{width:min(168px,52vw);height:min(168px,52vw)}
+  #heroQrBox svg{width:min(180px,50vw);height:auto}
   .joinUrl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80vw}
 }
 
@@ -157,7 +159,7 @@ body.hasPeers .mobileDot{background:#58b531}
   body:not(.hasPeers) #messages{display:none}
   body.hasPeers #hostHero{display:none}
   #hostHero{margin:auto;width:100%;max-height:100%;overflow-y:auto}
-  #heroQrBox svg{width:min(300px,36vh)}
+  #heroQrBox svg{width:min(200px,36vh)}
   #transfers{padding:0 20px}
   #inputBar{margin-top:0;padding:10px 16px 14px}
   .dropHint{display:inline}

@@ -917,8 +917,8 @@ function boot() {
   };
   $('btnRoom').onclick = function () { $('messages').scrollTo({ top: 0, behavior: 'smooth' }); };
   // ----- mobile drawer (sidebar collapses behind the hamburger under 700px) -----
-  function closeDrawer() { document.body.classList.remove('drawerOpen'); $('drawerBackdrop').classList.add('hidden'); }
-  $('btnDrawer').onclick = function () { var open = document.body.classList.toggle('drawerOpen'); $('drawerBackdrop').classList.toggle('hidden', !open); };
+  function closeDrawer() { document.body.classList.remove('drawerOpen'); }
+  $('btnDrawer').onclick = function () { document.body.classList.toggle('drawerOpen'); };
   $('drawerBackdrop').onclick = closeDrawer;
   $('btnRegen').onclick = function () { if (confirm('结束当前会话并换新二维码？之前扫过旧码的临时设备将需要重新扫码。')) regenerate(); };
   $('btnSkipReconnect').onclick = function () { if (autoProbe) autoProbeFail(); };
