@@ -189,6 +189,7 @@ function boot() {
   var outbox = [];         // undelivered texts [{msgId, text, ts, target, pendingFor, payload, el}]
   var sendQueues = {};     // peerId -> promise chain (one file at a time per conn)
   var autoProbe = null;    // {room, timer} while auto-reconnecting to a trusted host
+  var guestAnnounced = false; // true once the status line has flipped to 已连接 for this join
   var guestInfo = null;    // join payload of the room we are a guest in
   var lastOfflineRooms = {}; // room -> true, remembered so the trusted card keeps its 离线 badge across re-renders
 
@@ -368,7 +369,7 @@ function boot() {
       renderRoster();
     }
     if (!isHost && conn.peer === currentHostPeerId) {
-      setStatus('对方已关闭页面，连接已断开。对方重新打开页面后，信任设备可直接重连，临时配对需重新扫码。');
+      setStatus('对方已关闭页面，连接已断开');
     }
     var rtid = recvByPeer[conn.peer];
     if (rtid) {
@@ -448,6 +449,7 @@ function boot() {
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) ensureConn(roster[id].peerId); });
     // If we are a guest, the first roster means the auto-reconnect / join worked.
     if (!isHost && autoProbe) { autoProbeSuccess(); }
+    else if (!isHost && guestInfo && !guestAnnounced) { guestAnnounced = true; setStatus('已连接 ✔'); }
     if (!isHost && guestInfo) updateTrustBannerLabel();
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) flushForDevice(id); });
   }
@@ -717,6 +719,7 @@ function boot() {
   function joinRoom(info, opts) {
     opts = opts || {};
     cancelAutoProbe();
+    guestAnnounced = false;
     isHost = false; guestInfo = info;
     room = info.room; secret = info.secret; currentHostPeerId = info.hostPeerId;
     startPeer(null, info.hostPeerId);
@@ -745,7 +748,7 @@ function boot() {
         if (isHost) { alert('这个连接码已被占用（可能你在另一个标签页/窗口也打开了 Kiwi 并记住了同一连接）。请关掉多余的页面，或点「结束会话并换新二维码」。'); setStatus('连接码被占用：可能另一个页面正用同一连接当主机'); }
       } else if (err.type === 'peer-unavailable') {
         if (autoProbe) { autoProbeFail(); }
-        else if (!isHost) setStatus('对方未打开页面：主机设备需要先打开 Kiwi 页面，这个连接才能连上。');
+        else if (!isHost) setStatus('对方未打开页面，先让对方打开 Kiwi');
         else setStatus('有一台离线设备暂时联系不上');
       } else {
         setStatus('连接问题：' + err.type + '（检查网络后刷新页面重试）');
@@ -804,10 +807,11 @@ function boot() {
     joinRoom({ room: h.room, secret: h.secret, hostPeerId: h.hostPeerId, viaQR: true }, { viaTrust: true });
     autoProbe = { room: h.room, timer: setTimeout(autoProbeFail, 9000) };
     $('reconnectBar').classList.remove('hidden');
-    $('reconnectText').textContent = '正在尝试自动重连已信任的设备「' + (h.hostLabel || h.room) + '」，连不上会自动打开你的二维码…';
+    $('reconnectText').textContent = '正在重连「' + (h.hostLabel || h.room) + '」…';
   }
   function cancelAutoProbe() { if (autoProbe) { clearTimeout(autoProbe.timer); autoProbe = null; } $('reconnectBar').classList.add('hidden'); }
   function autoProbeSuccess() {
+    guestAnnounced = true;
     cancelAutoProbe();
     setStatus('已自动重连到信任设备，不用扫码 ✔');
   }
@@ -842,6 +846,7 @@ function boot() {
   // ----- In-page camera scan (secondary join path) -----
   var scanStream = null, scanRAF = null;
   function startScan() {
+    closeDrawer();
     $('scanModal').classList.remove('hidden');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('scanTip').textContent = '此设备/浏览器不支持摄像头扫码，请用手动输入连接码加入（主机需在线）。'; return; }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (stream) {
@@ -884,6 +889,10 @@ function boot() {
     if (confirm('加入别的设备会离开当前连接，确定加入 ' + info.room + ' 吗？')) joinRoom(info);
   };
   $('btnRoom').onclick = function () { $('messages').scrollTo({ top: 0, behavior: 'smooth' }); };
+  // ----- mobile drawer (sidebar collapses behind the hamburger under 700px) -----
+  function closeDrawer() { document.body.classList.remove('drawerOpen'); $('drawerBackdrop').classList.add('hidden'); }
+  $('btnDrawer').onclick = function () { var open = document.body.classList.toggle('drawerOpen'); $('drawerBackdrop').classList.toggle('hidden', !open); };
+  $('drawerBackdrop').onclick = closeDrawer;
   $('btnRegen').onclick = function () { if (confirm('结束当前会话并换新二维码？之前扫过旧码的临时设备将需要重新扫码。')) regenerate(); };
   $('btnSkipReconnect').onclick = function () { if (autoProbe) autoProbeFail(); };
   $('btnCopyJoinUrl').onclick = function () {
@@ -907,7 +916,7 @@ function boot() {
     if (this.checked) {
       upsertTrustedHost(guestInfo, hostLabelForCurrentRoom());
       $('btnForgetHost').classList.remove('hidden');
-      setStatus('已信任此设备：以后打开本页可自动/一键重连，不用再扫码（对方页面需打开）');
+      setStatus('已信任此设备');
     } else {
       removeTrustedHost(guestInfo.room);
       $('btnForgetHost').classList.add('hidden');
@@ -936,6 +945,7 @@ function boot() {
     Array.prototype.forEach.call($('colorPicks').children, function (el, i) { el.onclick = function () { editSel.color = PALETTE[i]; editSel.img = null; renderAvatarPreview(); }; });
   }
   $('btnEditProfile').onclick = function () {
+    closeDrawer();
     editSel = { emoji: me.icon, color: me.color, img: me.avatarImg || null };
     $('devName').value = me.name;
     buildPicks(); renderAvatarPreview();

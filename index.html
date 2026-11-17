@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="drawerBackdrop" class="hidden"></div>
 <div id="app">
 
   <aside id="sidebar">
@@ -57,16 +58,21 @@
   </aside>
 
   <div id="mainArea">
+    <div id="mobileBar">
+      <button id="btnDrawer" class="drawerBtn" aria-label="打开菜单"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="#4a5540" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg></button>
+      <span class="mobileBrand">🥝 Kiwi</span>
+      <span class="mobileDot"></span>
+    </div>
     <section id="reconnectBar" class="slimBar hidden">
       <p class="hint" id="reconnectText">正在尝试重连已信任的设备…</p>
-      <button id="btnSkipReconnect" class="ghost small">跳过，直接打开我的二维码</button>
+      <button id="btnSkipReconnect" class="ghost small">跳过重连</button>
     </section>
 
     <section id="joinBanner" class="slimBar hidden">
       <div id="joinBannerText">已连接到对方设备。</div>
       <label class="switchRow">
         <input type="checkbox" id="chkTrustHost">
-        <span><b>信任此设备</b>——记住这个连接，以后打开本页就能一键重连（或自动尝试重连），不用再扫码。仍需对方页面同时打开。</span>
+        <span><b>信任此设备</b></span>
       </label>
       <div class="row">
         <button id="btnForgetHost" class="ghost small danger hidden">取消信任 / 忘记此设备</button>
