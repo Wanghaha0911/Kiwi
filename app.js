@@ -147,7 +147,14 @@ function boot() {
   var $ = function (id) { return document.getElementById(id); };
   var PEER_OPTS = {
     host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
-    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }
+    config: { iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    ] }
   };
 
   // ----- persistent identity (survives everything; it is just "who am I") -----
@@ -190,6 +197,7 @@ function boot() {
   var sendQueues = {};     // peerId -> promise chain (one file at a time per conn)
   var autoProbe = null;    // {room, timer} while auto-reconnecting to a trusted host
   var guestAnnounced = false; // true once the status line has flipped to 已连接 for this join
+  var guestStallTimer = null;
   var guestInfo = null;    // join payload of the room we are a guest in
   var lastOfflineRooms = {}; // room -> true, remembered so the trusted card keeps its 离线 badge across re-renders
 
@@ -765,6 +773,10 @@ function boot() {
       if (isHost) setStatus(rememberChannel ? '已记住连接已打开，扫码过的信任设备可直接重连' : '临时连接已打开，等其他设备扫码加入');
       else {
         setStatus('正在连接主机…');
+        clearTimeout(guestStallTimer);
+        guestStallTimer = setTimeout(function () {
+          if (!isHost && !guestAnnounced) setStatus('连接有点久：确认对方页面开着、连接码一致；用流量时先换 WiFi 试试');
+        }, 15000);
         var c = peer.connect(hostPeerId, { reliable: true });
         setupConn(c, { registerOnOpen: true });
       }
