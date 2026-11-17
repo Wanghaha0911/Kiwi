@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Kiwi">
 <title>Kiwi · 猕猴桃-你的文件助手</title>
-<link rel="icon" type="image/svg+xml" href="logo.svg">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥝</text></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
 
   <aside id="sidebar">
     <div class="brand">
-      <img class="brandLogo" src="logo.svg" alt="Kiwi 标志">
+      <span class="brandLogoEmoji">🥝</span>
       <div class="brandText">
         <div class="appname">Kiwi</div>
         <div class="tagline">猕猴桃-你的文件助手</div>
@@ -23,10 +23,9 @@
     <div id="connStatus" class="status">正在准备…</div>
 
     <div class="selfRow">
-      <div class="selfLine"><span class="selfLabel">本机：</span><span id="selfBadge"></span></div>
-      <div class="selfEdit">
-        <input id="devName" placeholder="给本机起个名字">
-        <button id="btnSaveName" class="ghost small">保存名字</button>
+      <div class="selfLine">
+        <span class="avatarAnchor"><span id="selfAvatar"></span><button id="btnEditProfile" class="pencilBtn" title="更换头像和名字" aria-label="更换头像和名字"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zM20.7 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button></span>
+        <span id="selfNameText" class="selfName"></span>
       </div>
     </div>
 
@@ -128,6 +127,24 @@
     <div id="qrBox"></div>
     <p class="hint">连接码：<b id="qrRoomCode"></b><br>用另一台设备的相机扫码，会直接打开本页并自动加入；也可以在另一台设备打开 Kiwi 后点「扫码加入」。</p>
     <button id="btnCloseQR" class="primary">关闭</button>
+  </div>
+</div>
+
+
+<div id="profileModal" class="modal hidden">
+  <div class="card profileCard">
+    <h3>更换头像和名字</h3>
+    <div id="avatarPreview"></div>
+    <div class="pickLabel">选个头像</div>
+    <div class="pickRow" id="emojiPicks"></div>
+    <div class="pickLabel">选个颜色</div>
+    <div class="pickRow" id="colorPicks"></div>
+    <label class="fileBtn">🖼 上传图片当头像<input type="file" id="avatarFile" accept="image/*" hidden></label>
+    <input id="devName" placeholder="给本机起个名字">
+    <div class="row">
+      <button id="btnCancelProfile" class="ghost">取消</button>
+      <button id="btnSaveProfile" class="primary">保存</button>
+    </div>
   </div>
 </div>
 

@@ -41,10 +41,11 @@ function hashStr(s) {
 
 function colorFromId(id) { return PALETTE[hashStr(String(id)) % PALETTE.length]; }
 
-function detectPlatform(ua) {
+function detectPlatform(ua, maxTouchPoints) {
   ua = ua || '';
   if (/iPhone/i.test(ua)) return { platform: 'iPhone', icon: '📱' };
   if (/iPad/i.test(ua)) return { platform: 'iPad', icon: '📱' };
+  if (/Macintosh|Mac OS/i.test(ua) && (maxTouchPoints || 0) > 1) return { platform: 'iPad', icon: '📱' }; // iPadOS pretends to be a Mac
   if (/Android/i.test(ua)) return { platform: 'Android', icon: '🤖' };
   if (/Windows/i.test(ua)) return { platform: 'Windows', icon: '💻' };
   if (/Macintosh|Mac OS/i.test(ua)) return { platform: 'Mac', icon: '💻' };
@@ -152,9 +153,10 @@ function boot() {
   // ----- persistent identity (survives everything; it is just "who am I") -----
   var deviceId = localStorage.getItem('kiwi_deviceId');
   if (!deviceId) { deviceId = 'dev-' + randomCode(10, 'abcdefghijklmnopqrstuvwxyz0123456789'); localStorage.setItem('kiwi_deviceId', deviceId); }
-  var plat = detectPlatform(navigator.userAgent);
+  var plat = detectPlatform(navigator.userAgent, navigator.maxTouchPoints || 0);
   var myName = localStorage.getItem('kiwi_deviceName') || (plat.platform + '-' + deviceId.slice(-4));
-  var me = { deviceId: deviceId, name: myName, platform: plat.platform, icon: plat.icon, color: colorFromId(deviceId), peerId: null };
+  var me = { deviceId: deviceId, name: myName, platform: plat.platform, icon: plat.icon, color: colorFromId(deviceId), peerId: null, avatarImg: null };
+  try { var avPref = JSON.parse(localStorage.getItem('kiwi_avatar') || 'null'); if (avPref) { if (avPref.emoji) me.icon = avPref.emoji; if (avPref.color) me.color = avPref.color; me.avatarImg = avPref.img || null; } } catch (e) {}
   localStorage.removeItem('kiwi_room'); // legacy key from the app version; the web version does not resume rooms implicitly
 
   // ----- trust storage -----
@@ -187,7 +189,7 @@ function boot() {
   var lastOfflineRooms = {}; // room -> true, remembered so the trusted card keeps its 离线 badge across re-renders
 
   function setStatus(t) { $('connStatus').textContent = t; }
-  function publicMe() { return { deviceId: me.deviceId, name: me.name, platform: me.platform, icon: me.icon, color: me.color, peerId: me.peerId, online: true }; }
+  function publicMe() { return { deviceId: me.deviceId, name: me.name, platform: me.platform, icon: me.icon, color: me.color, peerId: me.peerId, online: true, avatarImg: me.avatarImg || null }; }
   function joinUrl() { return buildJoinUrl(location.href, room, secret); }
 
   function escapeHtml(s) {
@@ -201,9 +203,14 @@ function boot() {
   }
 
   // ----- UI: self + roster -----
+  function avatarHtml(d, big) {
+    var cls = 'avatar' + (big ? ' avatarBig' : '');
+    if (d.avatarImg) return '<span class="' + cls + ' avatarImg"><img alt="" src="' + d.avatarImg + '"></span>';
+    return '<span class="' + cls + '" style="background:' + (d.color || '#888') + '">' + (d.icon || '🔌') + '</span>';
+  }
   function renderSelf() {
-    $('selfBadge').innerHTML = '<span class="avatar" style="background:' + me.color + '">' + me.icon + '</span> ' + escapeHtml(me.name) + '（' + me.platform + '）';
-    if (document.activeElement !== $('devName')) $('devName').value = me.name;
+    $('selfAvatar').innerHTML = avatarHtml(me, true);
+    $('selfNameText').innerHTML = '<b>' + escapeHtml(me.name) + '</b><span class="selfPlat">' + escapeHtml(me.platform) + ' · 本机</span>';
   }
   function renderRoster() {
     var list = $('deviceList'); list.innerHTML = '';
@@ -220,7 +227,7 @@ function boot() {
       var off = d.online === false;
       var li = document.createElement('li');
       if (off) li.className = 'offline';
-      var html = '<span class="dot' + (off ? '' : ' on') + '"></span><span class="avatar" style="background:' + d.color + '">' + (d.icon || '🔌') + '</span><b>' + escapeHtml(d.name) + '</b><span>' + escapeHtml(d.platform) + '</span>';
+      var html = '<span class="dot' + (off ? '' : ' on') + '"></span>' + avatarHtml(d) + '<b>' + escapeHtml(d.name) + '</b><span>' + escapeHtml(d.platform) + '</span>';
       if (id === deviceId) html += '<span class="selfTag">本机</span>';
       if (off) html += '<span class="offTag">离线</span>';
       if (isHost && id !== deviceId) {
@@ -254,7 +261,7 @@ function boot() {
       if (roster[id] && roster[id].online === false) delete roster[id]; // forgotten + offline: drop from roster entirely
     } else if (roster[id]) {
       var d = roster[id];
-      map[id] = { deviceId: d.deviceId, name: d.name, platform: d.platform, icon: d.icon, color: d.color };
+      map[id] = { deviceId: d.deviceId, name: d.name, platform: d.platform, icon: d.icon, color: d.color, avatarImg: d.avatarImg || null };
     }
     saveHostTrustedGuests(map);
     renderRoster();
@@ -760,12 +767,53 @@ function boot() {
     $('btnForgetHost').classList.add('hidden');
     setStatus('已忘记此设备，下次连接需要重新扫码');
   };
-  $('btnSaveName').onclick = function () {
-    var n = $('devName').value.trim(); if (!n) return;
-    me.name = n; localStorage.setItem('kiwi_deviceName', n);
+  // ----- profile editor: pencil on the avatar -> change avatar + name -----
+  var AVATAR_EMOJIS = ['💻', '📱', '🥝', '🍎', '🐱', '🐶', '🦊', '🐼', '🚀', '⭐', '🎧', '⌚'];
+  var editSel = { emoji: null, color: null, img: null };
+  function renderAvatarPreview() {
+    $('avatarPreview').innerHTML = avatarHtml({ icon: editSel.emoji || me.icon, color: editSel.color || me.color, avatarImg: editSel.img }, true);
+    Array.prototype.forEach.call($('emojiPicks').children, function (el, i) { el.classList.toggle('sel', !editSel.img && (editSel.emoji || me.icon) === AVATAR_EMOJIS[i]); });
+    Array.prototype.forEach.call($('colorPicks').children, function (el, i) { el.classList.toggle('sel', !editSel.img && (editSel.color || me.color) === PALETTE[i]); });
+  }
+  function buildPicks() {
+    $('emojiPicks').innerHTML = AVATAR_EMOJIS.map(function (e) { return '<button type="button" class="pickEmoji">' + e + '</button>'; }).join('');
+    Array.prototype.forEach.call($('emojiPicks').children, function (el, i) { el.onclick = function () { editSel.emoji = AVATAR_EMOJIS[i]; editSel.img = null; renderAvatarPreview(); }; });
+    $('colorPicks').innerHTML = PALETTE.map(function (c) { return '<button type="button" class="pickColor" style="background:' + c + '"></button>'; }).join('');
+    Array.prototype.forEach.call($('colorPicks').children, function (el, i) { el.onclick = function () { editSel.color = PALETTE[i]; editSel.img = null; renderAvatarPreview(); }; });
+  }
+  $('btnEditProfile').onclick = function () {
+    editSel = { emoji: me.icon, color: me.color, img: me.avatarImg || null };
+    $('devName').value = me.name;
+    buildPicks(); renderAvatarPreview();
+    $('profileModal').classList.remove('hidden');
+  };
+  $('btnCancelProfile').onclick = function () { $('profileModal').classList.add('hidden'); };
+  $('profileModal').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+  $('avatarFile').addEventListener('change', function () {
+    var f = this.files && this.files[0]; this.value = '';
+    if (!f) return;
+    var url = URL.createObjectURL(f);
+    var img = new Image();
+    img.onload = function () {
+      var c = document.createElement('canvas'); c.width = 96; c.height = 96;
+      var s = Math.min(img.width, img.height);
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 96, 96);
+      URL.revokeObjectURL(url);
+      try { editSel.img = c.toDataURL('image/jpeg', 0.85); } catch (e) { editSel.img = null; }
+      renderAvatarPreview();
+    };
+    img.src = url;
+  });
+  $('btnSaveProfile').onclick = function () {
+    var n = $('devName').value.trim(); if (n) { me.name = n; localStorage.setItem('kiwi_deviceName', n); }
+    if (editSel.emoji) me.icon = editSel.emoji;
+    if (editSel.color) me.color = editSel.color;
+    me.avatarImg = editSel.img || null;
+    try { localStorage.setItem('kiwi_avatar', JSON.stringify({ emoji: me.icon, color: me.color, img: me.avatarImg })); } catch (e) {}
     roster[deviceId] = publicMe(); renderSelf(); renderRoster();
     Object.keys(conns).forEach(function (pid) { var c = conns[pid]; if (c.open) { try { c.send({ kind: 'device-update', device: publicMe() }); } catch (e) {} } });
     if (isHost) hostBroadcastRoster();
+    $('profileModal').classList.add('hidden');
   };
   $('btnSend').onclick = sendText;
   $('textInput').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } });

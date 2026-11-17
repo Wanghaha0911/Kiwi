@@ -27,7 +27,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
 /* ---------- sidebar ---------- */
 #sidebar{background:var(--sidebar);padding:14px;border-bottom:1px solid var(--border)}
 .brand{display:flex;align-items:center;gap:11px}
-.brandLogo{width:46px;height:46px;flex:none}
+.brandLogoEmoji{font-size:42px;line-height:1;flex:none}
 .appname{font-size:21px;font-weight:700;line-height:1.1;color:var(--brown)}
 .tagline{font-size:12.5px;color:var(--muted);margin-top:2px}
 .status{font-size:12.5px;color:#55703f;margin-top:8px;line-height:1.45}
@@ -114,9 +114,9 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
 #scanVideo{width:300px;max-width:80vw;border-radius:10px;background:#000}
 
 /* ---------- desktop: fixed app-window layout (>=900px) ---------- */
-@media (min-width:900px){
+@media (min-width:700px){
   html,body{height:100%;overflow:hidden}
-  #app{display:grid;grid-template-columns:300px minmax(0,1fr);height:100vh}
+  #app{display:grid;grid-template-columns:262px minmax(0,1fr);height:100vh;height:100dvh}
   #sidebar{height:100%;overflow-y:auto;display:flex;flex-direction:column;border-bottom:0;border-right:1px solid var(--border);padding:16px 14px}
   .sideFoot{margin-top:auto;padding-top:14px}
   #mainArea{height:100%;min-height:0}
@@ -132,7 +132,34 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
   #transfers{padding:0 20px}
   #inputBar{margin-top:0;padding:10px 16px 14px}
   .dropHint{display:inline}
+  #inputBar{flex:none}
   #scanModal{position:absolute;inset:0}
   #sidebar::-webkit-scrollbar,#messages::-webkit-scrollbar{width:8px}
   #sidebar::-webkit-scrollbar-thumb,#messages::-webkit-scrollbar-thumb{background:#ccd6bf;border-radius:4px}
 }
+
+@media (min-width:1150px){ #app{grid-template-columns:300px minmax(0,1fr)} }
+
+/* ---------- self card + profile editor ---------- */
+.selfLine{gap:11px;flex-wrap:nowrap}
+.avatarAnchor{position:relative;display:inline-flex;flex:none}
+.avatarBig{width:46px;height:46px;font-size:23px}
+.avatarImg{background:#e8ebdf}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block;border-radius:50%}
+.pencilBtn{position:absolute;right:-6px;bottom:-6px;width:21px;height:21px;border-radius:50%;background:#fff;border:1px solid #d9e0cd;box-shadow:0 1px 4px rgba(40,50,30,.25);display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;z-index:2}
+.pencilBtn svg{width:12px;height:12px;fill:#5a6650}
+.pencilBtn:hover{background:#f2f7e8}
+.selfName{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.selfName b{font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.selfPlat{font-size:12px;color:var(--muted)}
+.profileCard{width:350px;text-align:left}
+.profileCard h3{text-align:center}
+#avatarPreview{display:flex;justify-content:center;margin:4px 0 10px}
+.pickLabel{font-size:12.5px;color:var(--muted);margin-top:8px}
+.pickRow{display:flex;flex-wrap:wrap;gap:7px;margin:6px 0 2px}
+.pickEmoji{width:40px;height:40px;font-size:20px;padding:0;border-radius:10px;background:#fff;line-height:1}
+.pickColor{width:29px;height:29px;border-radius:50%;padding:0;border:2px solid rgba(0,0,0,.08)}
+.pickRow .sel{border-color:var(--green);box-shadow:0 0 0 3px rgba(139,212,80,.35)}
+.profileCard .fileBtn{display:inline-block;margin:10px 0 2px}
+.profileCard input{width:100%;margin:8px 0}
+.profileCard .row{justify-content:flex-end;margin-top:10px}
