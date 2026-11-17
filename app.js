@@ -182,7 +182,11 @@ function boot() {
   var conns = {};          // peerId -> DataConnection
   var connDevice = {};     // peerId -> deviceId
   var seen = {};           // msgId/transferId dedup
-  var recvState = {};      // peerId -> active incoming transfer
+  var recvTransfers = {};  // transferId -> incoming partial (survives conn drops, enables resume)
+  var recvByPeer = {};     // peerId -> transferId currently streaming in on that conn
+  var outTransfers = {};   // transferId -> outgoing file record (queued / sending / paused)
+  var resumeWaiters = {};  // transferId -> resolve fn waiting for a file-resume-answer
+  var outbox = [];         // undelivered texts [{msgId, text, ts, target, pendingFor, payload, el}]
   var sendQueues = {};     // peerId -> promise chain (one file at a time per conn)
   var autoProbe = null;    // {room, timer} while auto-reconnecting to a trusted host
   var guestInfo = null;    // join payload of the room we are a guest in
@@ -237,8 +241,8 @@ function boot() {
       }
       li.innerHTML = html;
       list.appendChild(li);
-      if (id !== deviceId && !off) {
-        var op = document.createElement('option'); op.value = id; op.textContent = d.name + '（' + d.platform + '）'; sel.appendChild(op);
+      if (id !== deviceId) {
+        var op = document.createElement('option'); op.value = id; op.textContent = d.name + '（' + d.platform + (off ? ' · 离线' : '') + '）'; sel.appendChild(op);
       }
     });
     if ([].some.call(sel.options, function (o) { return o.value === cur; })) sel.value = cur;
@@ -335,6 +339,7 @@ function boot() {
     $('transfers').appendChild(d);
     return { box: d, bar: d.querySelector('.progress>i'), pct: d.querySelector('.pct'),
       set: function (done, total) { var p = total ? Math.floor(done * 100 / total) : 100; this.bar.style.width = p + '%'; this.pct.textContent = p + '%（' + fmtSize(done) + ' / ' + fmtSize(total) + '）'; },
+      note: function (t) { this.pct.textContent = t; },
       done: function (t) { this.pct.textContent = t || '完成'; var self = this; setTimeout(function () { self.box.remove(); }, 4000); } };
   }
 
@@ -365,6 +370,12 @@ function boot() {
     if (!isHost && conn.peer === currentHostPeerId) {
       setStatus('对方已关闭页面，连接已断开。对方重新打开页面后，信任设备可直接重连，临时配对需重新扫码。');
     }
+    var rtid = recvByPeer[conn.peer];
+    if (rtid) {
+      var rst = recvTransfers[rtid];
+      if (rst) rst.ui.note('已暂停（已收到 ' + fmtSize(rst.received) + '），对方回来后自动续传');
+      delete recvByPeer[conn.peer];
+    }
   }
   function ensureConn(peerId) {
     if (!peerId || peerId === me.peerId) return null;
@@ -379,6 +390,7 @@ function boot() {
       if (conn.open) return res();
       var to = setTimeout(function () { rej(new Error('连接超时')); }, 20000);
       conn.on('open', function () { clearTimeout(to); res(); });
+      conn.on('close', function () { clearTimeout(to); rej(new Error('连接已关闭')); });
     });
   }
 
@@ -391,15 +403,19 @@ function boot() {
       case 'register': if (isHost) hostHandleRegister(conn, data); break;
       case 'roster': applyRoster(data.devices); break;
       case 'hello':
-        if (data.device) { connDevice[conn.peer] = data.device.deviceId; if (!roster[data.device.deviceId]) { roster[data.device.deviceId] = data.device; renderRoster(); } }
+        if (data.device) { connDevice[conn.peer] = data.device.deviceId; if (!roster[data.device.deviceId]) { roster[data.device.deviceId] = data.device; renderRoster(); } flushForDevice(data.device.deviceId); }
         break;
       case 'device-update':
         if (data.device) { roster[data.device.deviceId] = data.device; connDevice[conn.peer] = data.device.deviceId; renderRoster(); if (isHost) hostBroadcastRoster(); }
         break;
-      case 'text': receiveText(data); break;
+      case 'text': receiveText(conn, data); break;
+      case 'ack': handleAck(data); break;
       case 'file-meta': receiveFileMeta(conn, data); break;
       case 'file-end': finishFile(conn, data); break;
       case 'file-cancel': cancelRecv(conn); break;
+      case 'file-resume-query': onResumeQuery(conn, data); break;
+      case 'file-resume-answer': { var w = resumeWaiters[data.transferId]; if (w) { delete resumeWaiters[data.transferId]; w(data.receivedChunks); } break; }
+      case 'file-resume-begin': onResumeBegin(conn, data); break;
     }
   }
 
@@ -414,6 +430,7 @@ function boot() {
     connDevice[conn.peer] = d.deviceId;
     hostBroadcastRoster();
     renderRoster();
+    flushForDevice(d.deviceId);
   }
   function hostBroadcastRoster() {
     if (!isHost) return;
@@ -432,100 +449,235 @@ function boot() {
     // If we are a guest, the first roster means the auto-reconnect / join worked.
     if (!isHost && autoProbe) { autoProbeSuccess(); }
     if (!isHost && guestInfo) updateTrustBannerLabel();
+    Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) flushForDevice(id); });
   }
 
-  // ----- Text -----
-  function receiveText(data) {
+  // ----- Text, with an outbox: undelivered texts wait and auto-send when the peer returns -----
+  function receiveText(conn, data) {
+    try { conn.send({ kind: 'ack', msgId: data.msgId, deviceId: deviceId }); } catch (e) {}
     if (seen[data.msgId]) return; seen[data.msgId] = 1;
     addMsg({ text: data.text, from: data.from, ts: data.ts, mine: data.from && data.from.deviceId === deviceId });
   }
-  function targetConns(target) {
-    var out = [];
-    if (target === 'ALL') {
-      Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) { var c = ensureConn(roster[id].peerId); if (c) out.push(c); } });
-    } else if (roster[target] && roster[target].online !== false) {
-      var c2 = ensureConn(roster[target].peerId); if (c2) out.push(c2);
+  function saveOutbox() {
+    try { localStorage.setItem('kiwi_outbox', JSON.stringify(outbox.map(function (it) { return { msgId: it.msgId, text: it.text, ts: it.ts, target: it.target, pendingFor: Object.keys(it.pendingFor) }; }))); } catch (e) {}
+  }
+  function renderOutboxTag(item) {
+    if (!item.el) return;
+    var tag = item.el.querySelector('.pendTag');
+    if (!Object.keys(item.pendingFor).length) {
+      if (tag) { tag.textContent = '已送达 ✔'; tag.classList.add('done'); setTimeout(function () { if (tag.parentNode) tag.remove(); }, 3000); }
+      return;
     }
-    return out;
+    if (!tag) { tag = document.createElement('div'); tag.className = 'pendTag'; item.el.appendChild(tag); }
+    tag.classList.remove('done');
+    tag.textContent = '⏳ 未送达，对方上线后自动发送';
+  }
+  function settleOutboxItem(item) {
+    renderOutboxTag(item);
+    if (!Object.keys(item.pendingFor).length) {
+      outbox = outbox.filter(function (x) { return x !== item; });
+      saveOutbox();
+    }
+  }
+  function handleAck(data) {
+    if (!data || !data.msgId || !data.deviceId) return;
+    outbox.slice().forEach(function (item) {
+      if (item.msgId === data.msgId && item.pendingFor[data.deviceId]) { delete item.pendingFor[data.deviceId]; settleOutboxItem(item); }
+    });
+  }
+  function isDeviceConnOpen(id) {
+    var d = roster[id]; if (!d || !d.peerId) return false;
+    var c = conns[d.peerId]; return !!(c && c.open);
+  }
+  async function tryDeliverText(item, id) {
+    if (!item.pendingFor[id]) return;
+    var d = roster[id]; if (!d || d.online === false || !d.peerId) return;
+    var conn = ensureConn(d.peerId); if (!conn) return;
+    try {
+      await waitOpen(conn);
+      if (!item.pendingFor[id]) return;
+      conn.send(item.payload);
+      // Fallback: if no ack returns but the connection is clearly alive (peer on an older page version), count it delivered.
+      setTimeout(function () { if (item.pendingFor[id] && isDeviceConnOpen(id)) { delete item.pendingFor[id]; settleOutboxItem(item); } }, 9000);
+    } catch (e) { /* stays pending; retried when the device next appears */ }
+  }
+  function flushForDevice(id) {
+    if (!id || id === deviceId) return;
+    outbox.slice().forEach(function (item) { tryDeliverText(item, id); });
+    Object.keys(outTransfers).forEach(function (tid) { var rec = outTransfers[tid]; if (rec.targetDeviceId === id && (rec.state === 'queued' || rec.state === 'paused')) driveOutTransfer(rec); });
+  }
+  function flushAllPending() { Object.keys(roster).forEach(function (id) { if (roster[id].online !== false) flushForDevice(id); }); }
+  function restoreOutbox() {
+    loadJSON('kiwi_outbox', []).forEach(function (s) {
+      if (!s || !s.msgId || seen[s.msgId]) return;
+      seen[s.msgId] = 1;
+      var item = { msgId: s.msgId, text: s.text, ts: s.ts, target: s.target, pendingFor: {}, payload: { kind: 'text', msgId: s.msgId, text: s.text, from: publicMe(), ts: s.ts }, el: null };
+      (s.pendingFor || []).forEach(function (id) { item.pendingFor[id] = true; });
+      if (!Object.keys(item.pendingFor).length) return;
+      item.el = addMsg({ text: s.text, from: me, ts: s.ts, mine: true });
+      outbox.push(item);
+      renderOutboxTag(item);
+    });
   }
   async function sendText() {
     var text = $('textInput').value.trim();
     if (!text) return;
     if (!room) { alert('页面还在准备连接，稍等一秒再发'); return; }
+    var target = $('targetSel').value;
     var payload = { kind: 'text', msgId: 'm-' + Date.now() + '-' + randomCode(4, 'abcdefghijklmnopqrstuvwxyz0123456789'), text: text, from: publicMe(), ts: Date.now() };
     seen[payload.msgId] = 1;
-    addMsg({ text: text, from: me, ts: payload.ts, mine: true });
+    var wrap = addMsg({ text: text, from: me, ts: payload.ts, mine: true });
     $('textInput').value = '';
-    var list = targetConns($('targetSel').value);
-    if (!list.length) setStatus('暂时没有其他在线设备（对方需要打开页面并加入）');
-    for (var i = 0; i < list.length; i++) { try { await waitOpen(list[i]); list[i].send(payload); } catch (e) { setStatus('有一台设备暂时连不上（需同时在线）'); } }
+    var recipients = [];
+    if (target === 'ALL') { Object.keys(roster).forEach(function (id) { if (id !== deviceId) recipients.push(id); }); }
+    else recipients = [target];
+    if (!recipients.length) { setStatus('还没有其他设备：对方打开页面加入过一次后，即使它离线，你也可以先发，文字会存着等它上线'); return; }
+    var item = { msgId: payload.msgId, text: text, ts: payload.ts, target: target, pendingFor: {}, payload: payload, el: wrap };
+    recipients.forEach(function (id) { item.pendingFor[id] = true; });
+    outbox.push(item); saveOutbox(); renderOutboxTag(item);
+    recipients.forEach(function (id) { tryDeliverText(item, id); });
   }
 
-  // ----- Files: chunked send with backpressure (no size/type limits) -----
-  function sendFilesToConn(conn, file, targetLabel) {
-    var run = async function () {
-      await waitOpen(conn);
-      var transferId = 't-' + Date.now() + '-' + randomCode(5, 'abcdefghijklmnopqrstuvwxyz0123456789');
-      conn.send({ kind: 'file-meta', transferId: transferId, name: file.name, size: file.size, mime: file.type || 'application/octet-stream', from: publicMe(), ts: Date.now() });
-      var ui = progressEl(transferId, '发送 ' + file.name + ' → ' + targetLabel);
-      var plan = planChunks(file.size, CHUNK_SIZE);
-      var sentBytes = 0;
-      var dc = conn.dataChannel;
-      for (var i = 0; i < plan.length; i++) {
-        while (dc && dc.bufferedAmount > 4 * 1024 * 1024) { await new Promise(function (r) { setTimeout(r, 40); }); }
-        var buf = await file.slice(plan[i].start, plan[i].end).arrayBuffer(); // one chunk at a time, never the whole file
-        conn.send(buf);
-        sentBytes += (plan[i].end - plan[i].start);
-        if (i % 16 === 0 || i === plan.length - 1) ui.set(sentBytes, file.size);
-      }
-      while (dc && dc.bufferedAmount > 0) { await new Promise(function (r) { setTimeout(r, 40); }); }
-      conn.send({ kind: 'file-end', transferId: transferId });
-      ui.set(file.size, file.size); ui.done('已发送 ✔');
-    };
+  // ----- Files: chunked send with backpressure + resume (no size/type limits) -----
+  function driveOutTransfer(rec) {
+    if (rec.state === 'sending' || rec.state === 'done') return;
+    var d = roster[rec.targetDeviceId];
+    if (!d || d.online === false || !d.peerId) { rec.state = 'queued'; rec.ui.note('等待对方上线后自动发送'); return; }
+    var conn = ensureConn(d.peerId);
+    if (!conn) { rec.state = 'queued'; rec.ui.note('等待对方上线后自动发送'); return; }
+    rec.state = 'sending';
+    rec.driveId = (rec.driveId || 0) + 1;
+    var myDrive = rec.driveId;
+    var run = function () { return streamOutTransfer(rec, conn, myDrive); };
     var prev = sendQueues[conn.peer] || Promise.resolve();
     sendQueues[conn.peer] = prev.then(run, run);
-    return sendQueues[conn.peer];
+  }
+  function queryResume(rec, conn) {
+    return new Promise(function (res) {
+      var to = setTimeout(function () { delete resumeWaiters[rec.transferId]; res(-1); }, 6000);
+      resumeWaiters[rec.transferId] = function (n) { clearTimeout(to); res(n); };
+      try { conn.send({ kind: 'file-resume-query', transferId: rec.transferId, name: rec.file.name, size: rec.file.size }); }
+      catch (e) { clearTimeout(to); delete resumeWaiters[rec.transferId]; res(-1); }
+    });
+  }
+  function sendMeta(rec, conn) {
+    conn.send({ kind: 'file-meta', transferId: rec.transferId, name: rec.file.name, size: rec.file.size, mime: rec.file.type || 'application/octet-stream', from: publicMe(), ts: Date.now() });
+  }
+  async function streamOutTransfer(rec, conn, myDrive) {
+    try {
+      await waitOpen(conn);
+      if (!conn.open || rec.driveId !== myDrive) return; // superseded by a newer drive, or the conn died instantly
+      updateWakeLock();
+      if (rec.nextIndex === 0) {
+        sendMeta(rec, conn);
+      } else {
+        var startAt = await queryResume(rec, conn);
+        if (rec.driveId !== myDrive) return;
+        if (startAt < 0 || startAt > rec.plan.length) {
+          // The receiver kept nothing (e.g. its page reloaded): restart from scratch under a fresh id.
+          delete outTransfers[rec.transferId];
+          rec.transferId = 't-' + Date.now() + '-' + randomCode(5, 'abcdefghijklmnopqrstuvwxyz0123456789');
+          outTransfers[rec.transferId] = rec;
+          rec.nextIndex = 0; rec.sentBytes = 0;
+          sendMeta(rec, conn);
+        } else {
+          rec.nextIndex = startAt;
+          rec.sentBytes = 0;
+          for (var k = 0; k < startAt; k++) rec.sentBytes += (rec.plan[k].end - rec.plan[k].start);
+          conn.send({ kind: 'file-resume-begin', transferId: rec.transferId, fromChunk: startAt });
+          rec.ui.note('已重新接上，从 ' + fmtSize(rec.sentBytes) + ' 处继续传');
+        }
+      }
+      var dc = conn.dataChannel;
+      for (var i = rec.nextIndex; i < rec.plan.length; i++) {
+        while (dc && dc.bufferedAmount > 4 * 1024 * 1024) { if (!conn.open) throw new Error('closed'); await new Promise(function (r) { setTimeout(r, 40); }); }
+        if (!conn.open) throw new Error('closed');
+        var buf = await rec.file.slice(rec.plan[i].start, rec.plan[i].end).arrayBuffer(); // one chunk at a time, never the whole file
+        if (!conn.open) throw new Error('closed');
+        conn.send(buf);
+        rec.nextIndex = i + 1;
+        rec.sentBytes += (rec.plan[i].end - rec.plan[i].start);
+        if (i % 16 === 0 || i === rec.plan.length - 1) rec.ui.set(rec.sentBytes, rec.file.size);
+      }
+      while (dc && dc.bufferedAmount > 0) { if (!conn.open) throw new Error('closed'); await new Promise(function (r) { setTimeout(r, 40); }); }
+      conn.send({ kind: 'file-end', transferId: rec.transferId });
+      rec.state = 'done';
+      rec.ui.set(rec.file.size, rec.file.size); rec.ui.done('已发送 ✔');
+      delete outTransfers[rec.transferId];
+    } catch (e) {
+      if (rec.driveId === myDrive && rec.state !== 'done') { rec.state = 'paused'; rec.ui.note('已暂停（已传 ' + fmtSize(rec.sentBytes) + '），对方回来后自动续传'); }
+    }
+    updateWakeLock();
   }
   async function sendFiles(files) {
     if (!room) { alert('页面还在准备连接，稍等一秒再发'); return; }
     var target = $('targetSel').value;
-    var list = targetConns(target);
-    if (!list.length) { alert('还没有其他在线设备，等对方打开 Kiwi 页面并加入后再发（需要同时在线）'); return; }
-    for (var c = 0; c < list.length; c++) {
-      var label = (connDevice[list[c].peer] && roster[connDevice[list[c].peer]] && roster[connDevice[list[c].peer]].name) || list[c].peer;
-      for (var f = 0; f < files.length; f++) { sendFilesToConn(list[c], files[f], target === 'ALL' ? '所有设备' : label); }
-    }
+    var recipients = [];
+    if (target === 'ALL') { Object.keys(roster).forEach(function (id) { if (id !== deviceId) recipients.push(id); }); }
+    else recipients = [target];
+    if (!recipients.length) { alert('还没有其他设备。对方打开 Kiwi 页面加入过一次后，即使它暂时离线，你也可以在设备列表里先选它发送，文件会等它上线后自动发过去。'); return; }
     for (var k = 0; k < files.length; k++) {
       addMsg({ from: me, mine: true, ts: Date.now(), file: { name: files[k].name, size: files[k].size, isImage: (files[k].type || '').indexOf('image/') === 0, url: URL.createObjectURL(files[k]) } });
     }
+    recipients.forEach(function (rid) {
+      var label = (roster[rid] && roster[rid].name) || '设备';
+      for (var f = 0; f < files.length; f++) {
+        var file = files[f];
+        var rec = { transferId: 't-' + Date.now() + '-' + randomCode(5, 'abcdefghijklmnopqrstuvwxyz0123456789'), file: file, targetDeviceId: rid, plan: planChunks(file.size, CHUNK_SIZE), nextIndex: 0, sentBytes: 0, state: 'queued', ui: null };
+        rec.ui = progressEl(rec.transferId, '发送 ' + file.name + ' → ' + label);
+        outTransfers[rec.transferId] = rec;
+        driveOutTransfer(rec);
+      }
+    });
   }
 
-  // ----- Files: receive -----
+  // ----- Files: receive (partials are kept per transfer, so a dropped transfer can resume) -----
   function receiveFileMeta(conn, data) {
     if (seen[data.transferId]) return; seen[data.transferId] = 1;
     var ui = progressEl(data.transferId, '接收 ' + data.name + ' ← ' + (data.from ? data.from.name : ''));
-    recvState[conn.peer] = { meta: data, chunks: [], received: 0, ui: ui };
+    recvTransfers[data.transferId] = { meta: data, chunks: [], received: 0, ui: ui, lastChunkAt: Date.now() };
+    recvByPeer[conn.peer] = data.transferId;
+    updateWakeLock();
   }
   async function handleChunk(conn, data) {
-    var st = recvState[conn.peer]; if (!st) return;
+    var tid = recvByPeer[conn.peer]; if (!tid) return;
+    var st = recvTransfers[tid]; if (!st) return;
     var u8;
     if (data instanceof ArrayBuffer) u8 = new Uint8Array(data);
     else if (data instanceof Uint8Array) u8 = data;
     else if (typeof Blob !== 'undefined' && data instanceof Blob) u8 = new Uint8Array(await data.arrayBuffer());
     else return;
-    st.chunks.push(u8); st.received += u8.length;
+    st.chunks.push(u8); st.received += u8.length; st.lastChunkAt = Date.now();
     st.ui.set(st.received, st.meta.size);
   }
   function finishFile(conn, data) {
-    var st = recvState[conn.peer]; if (!st) return;
-    delete recvState[conn.peer];
+    var st = recvTransfers[data.transferId]; if (!st) return;
+    delete recvTransfers[data.transferId];
+    if (recvByPeer[conn.peer] === data.transferId) delete recvByPeer[conn.peer];
     var bytes = reassembleChunks(st.chunks);
     var blob = new Blob([bytes], { type: st.meta.mime || 'application/octet-stream' });
     var url = URL.createObjectURL(blob);
     st.ui.done('已接收 ✔');
     addMsg({ from: st.meta.from, ts: st.meta.ts, mine: false, file: { name: st.meta.name, size: st.meta.size, isImage: (st.meta.mime || '').indexOf('image/') === 0, url: url } });
+    updateWakeLock();
   }
-  function cancelRecv(conn) { var st = recvState[conn.peer]; if (st) { st.ui.done('对方已取消'); delete recvState[conn.peer]; } }
+  function cancelRecv(conn) {
+    var tid = recvByPeer[conn.peer]; var st = tid && recvTransfers[tid];
+    if (st) { st.ui.done('对方已取消'); delete recvTransfers[tid]; delete recvByPeer[conn.peer]; }
+    updateWakeLock();
+  }
+  function onResumeQuery(conn, data) {
+    var st = recvTransfers[data.transferId];
+    var n = (st && st.meta.size === data.size && st.meta.name === data.name) ? st.chunks.length : -1;
+    try { conn.send({ kind: 'file-resume-answer', transferId: data.transferId, receivedChunks: n }); } catch (e) {}
+  }
+  function onResumeBegin(conn, data) {
+    var st = recvTransfers[data.transferId]; if (!st) return;
+    recvByPeer[conn.peer] = data.transferId;
+    st.lastChunkAt = Date.now();
+    st.ui.note('对方正在续传（已收到 ' + fmtSize(st.received) + '，接着传）…');
+    updateWakeLock();
+  }
 
   // ----- Session lifecycle -----
   function enterRoomUI() {
@@ -605,7 +757,9 @@ function boot() {
     var keepRemember = rememberChannel;
     sessionStorage.removeItem('kiwi_temp_host');
     if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
-    seen = {}; recvState = {}; sendQueues = {};
+    seen = {}; recvTransfers = {}; recvByPeer = {}; sendQueues = {};
+    Object.keys(resumeWaiters).forEach(function (k) { try { resumeWaiters[k](-1); } catch (e) {} }); resumeWaiters = {};
+    Object.keys(outTransfers).forEach(function (k) { outTransfers[k].ui.done('已取消'); }); outTransfers = {};
     becomeHost(null, keepRemember);
     setStatus('已结束旧会话，生成了新二维码。之前扫过旧码的临时设备需要重新扫码。');
   }
@@ -849,8 +1003,41 @@ function boot() {
     sendFiles(renamed);
   });
 
+  // ----- Wake lock: keep the screen on while a transfer is running (a sleeping screen freezes the page) -----
+  var wakeLock = null;
+  async function updateWakeLock() {
+    var now = Date.now();
+    var sending = Object.keys(outTransfers).some(function (k) { return outTransfers[k].state === 'sending'; });
+    var receiving = Object.keys(recvTransfers).some(function (k) { return now - (recvTransfers[k].lastChunkAt || 0) < 60000; });
+    try {
+      if ((sending || receiving) && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+        if (!wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', function () { wakeLock = null; }); }
+      } else if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    } catch (e) {}
+  }
+  setInterval(updateWakeLock, 25000);
+
+  // ----- Auto-reconnect when the page comes back to the foreground (e.g. after switching apps) -----
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    updateWakeLock();
+    if (autoProbe) return; // the boot-time trusted-host probe is already on it
+    if (peer && peer.disconnected && !peer.destroyed) { try { peer.reconnect(); } catch (e) {} }
+    setTimeout(function () {
+      if (!peer || peer.destroyed) {
+        if (!isHost && guestInfo) { joinRoom(guestInfo); setStatus('页面回到前台，已自动重新连接…'); }
+        else if (isHost) { becomeHostFromStorage(); setStatus('页面回到前台，已自动恢复连接…'); }
+        return;
+      }
+      if (!isHost && guestInfo && currentHostPeerId && !conns[currentHostPeerId]) {
+        try { var c = peer.connect(currentHostPeerId, { reliable: true }); setupConn(c, { registerOnOpen: true }); } catch (e) {}
+      }
+      flushAllPending();
+    }, 900);
+  });
+
   // ----- boot -----
-  renderSelf(); renderRoster();
+  renderSelf(); renderRoster(); restoreOutbox();
   var hashInfo = parseJoinFromHash(location.hash);
   if (hashInfo) {
     // Arrived by scanning the QR (system camera opened this page URL).
