@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect x="0" y="0" width="512" height="512" rx="104" fill="#6d4520"/>
+  <g stroke="#8bd450" stroke-width="27" stroke-linecap="round" fill="none">
+    <path d="M186 118 V318"/>
+    <path d="M298 122 L192 224"/>
+    <path d="M206 210 L312 322"/>
+  </g>
+  <text x="256" y="428" text-anchor="middle" font-family="Verdana, Geneva, sans-serif" font-size="57" letter-spacing="10" fill="#8bd450">kiwi</text>
+</svg>

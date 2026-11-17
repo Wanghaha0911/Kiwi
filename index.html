@@ -6,106 +6,132 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Kiwi">
 <title>Kiwi · 猕猴桃-你的文件助手</title>
+<link rel="icon" type="image/svg+xml" href="logo.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <div class="logo">🥝</div>
-  <div class="htitle">
-    <div class="appname">Kiwi</div>
-    <div class="tagline">猕猴桃-你的文件助手</div>
+<div id="app">
+
+  <aside id="sidebar">
+    <div class="brand">
+      <img class="brandLogo" src="logo.svg" alt="Kiwi 标志">
+      <div class="brandText">
+        <div class="appname">Kiwi</div>
+        <div class="tagline">猕猴桃-你的文件助手</div>
+      </div>
+    </div>
     <div id="connStatus" class="status">正在准备…</div>
-  </div>
-  <button id="btnRoom" class="hbtn">回到顶部</button>
-</header>
 
-<section id="reconnectBar" class="hidden">
-  <p class="hint" id="reconnectText">正在尝试重连已信任的设备…</p>
-  <button id="btnSkipReconnect" class="ghost small">跳过，直接打开我的二维码</button>
-</section>
+    <div class="selfRow">
+      <div class="selfLine"><span class="selfLabel">本机：</span><span id="selfBadge"></span></div>
+      <div class="selfEdit">
+        <input id="devName" placeholder="给本机起个名字">
+        <button id="btnSaveName" class="ghost small">保存名字</button>
+      </div>
+    </div>
 
-<section id="hostHero" class="hidden">
-  <h2 class="heroTitle">让另一台设备扫码，连到这台设备</h2>
-  <div id="heroQrBox"></div>
-  <div class="heroRoom">通道码 <b id="heroRoomCode"></b> <span id="heroSessionType" class="tag"></span></div>
-  <div class="joinUrlRow">
-    <span id="heroJoinUrl" class="joinUrl"></span>
-    <button id="btnCopyJoinUrl" class="ghost small">复制链接</button>
-  </div>
-  <p class="hint">用手机相机直接扫上面的二维码，就会在手机上打开本页并自动连到这台设备。也可以把链接发到另一台设备打开，效果一样。</p>
-  <label class="switchRow">
-    <input type="checkbox" id="chkRememberChannel">
-    <span><b>记住此通道</b>（信任）——打开后，本机每次打开网页都是同一个二维码，其他设备扫一次、并在对方页面勾选「信任此设备」后，以后不用再扫码。关闭则为临时通道：任意一方关掉页面就会断开，下次要重新扫码。</span>
-  </label>
-  <div class="row">
-    <button id="btnRegen" class="ghost danger">结束会话并换新二维码</button>
-  </div>
-  <p class="hint">说明：文件走互联网点对点直传，不经过服务器保存，所以传文件时双方页面都要开着；关掉页面即断开。</p>
-</section>
+    <button id="btnAddDevice" class="primary addBtn">＋ 添加新设备</button>
 
-<section id="trustedCard" class="hidden">
-  <div class="panelTitle">已信任的设备</div>
-  <ul id="trustedList"></ul>
-  <p class="hint">点「重连」即可连回对方，不用再扫码。前提是对方的 Kiwi 页面正打开着；对方没打开时会显示连不上。</p>
-</section>
+    <section id="devicePanel" class="sideSection">
+      <div class="panelTitle">通道里的设备 <span id="devCount"></span></div>
+      <ul id="deviceList"></ul>
+    </section>
 
-<section id="joinBanner" class="hidden">
-  <div id="joinBannerText">已连接到对方设备。</div>
-  <label class="switchRow">
-    <input type="checkbox" id="chkTrustHost">
-    <span><b>信任此设备</b>——记住这个通道，以后打开本页就能一键重连（或自动尝试重连），不用再扫码。仍需对方页面同时打开。</span>
-  </label>
-  <div class="row">
-    <button id="btnForgetHost" class="ghost small danger hidden">取消信任 / 忘记此设备</button>
-  </div>
-</section>
+    <section id="trustedCard" class="sideSection hidden">
+      <div class="panelTitle">已信任的设备</div>
+      <ul id="trustedList"></ul>
+      <p class="hint">点「重连」即可连回对方，不用再扫码。前提是对方的 Kiwi 页面正打开着；对方没打开时会显示连不上。</p>
+    </section>
 
-<section id="roomBar">
-  <div id="inRoom" class="hidden">
-    <div class="row between">
+    <section id="joinSection" class="sideSection">
+      <div class="panelTitle">加入其他设备的通道</div>
+      <p class="hint">如果想连到别人已经打开的通道（而不是用本机这个通道），可以用下面两种方式。加入别的通道会离开本机当前通道。</p>
+      <button id="btnScan" class="ghost scanBtn">📷 扫码加入</button>
+      <div class="manualRow">
+        <input id="manualCode" placeholder="或手动输入通道码，如 AB12CD34">
+        <button id="btnManual" class="ghost">加入</button>
+      </div>
+    </section>
+
+    <div class="sideFoot">
+      <button id="btnRoom" class="ghost small">回到顶部</button>
+    </div>
+  </aside>
+
+  <div id="mainArea">
+    <section id="reconnectBar" class="slimBar hidden">
+      <p class="hint" id="reconnectText">正在尝试重连已信任的设备…</p>
+      <button id="btnSkipReconnect" class="ghost small">跳过，直接打开我的二维码</button>
+    </section>
+
+    <section id="joinBanner" class="slimBar hidden">
+      <div id="joinBannerText">已连接到对方设备。</div>
+      <label class="switchRow">
+        <input type="checkbox" id="chkTrustHost">
+        <span><b>信任此设备</b>——记住这个通道，以后打开本页就能一键重连（或自动尝试重连），不用再扫码。仍需对方页面同时打开。</span>
+      </label>
+      <div class="row">
+        <button id="btnForgetHost" class="ghost small danger hidden">取消信任 / 忘记此设备</button>
+      </div>
+    </section>
+
+    <div id="inRoom" class="roomStrip hidden">
       <span>通道码 <b id="roomCode"></b> <span id="hostTag" class="tag"></span></span>
-      <span>
+      <span class="roomBtns">
         <button id="btnShowQR" class="ghost small">显示二维码邀请</button>
         <button id="btnLeave" class="ghost small danger hidden">退出并回到首页</button>
       </span>
     </div>
-  </div>
-  <div id="joinSection">
-    <div class="panelTitle">加入其他设备的通道</div>
-    <p class="hint">如果想连到别人已经打开的通道（而不是用本机这个通道），可以用下面两种方式。加入别的通道会离开本机当前通道。</p>
-    <div class="row">
-      <button id="btnScan" class="ghost">📷 扫码加入</button>
-      <input id="manualCode" placeholder="或手动输入通道码，如 AB12CD34">
-      <button id="btnManual" class="ghost">加入</button>
+
+    <div id="stage">
+      <section id="hostHero" class="hidden">
+        <h2 class="heroTitle">让另一台设备扫码，连到这台设备</h2>
+        <div id="heroQrBox"></div>
+        <div class="heroRoom">通道码 <b id="heroRoomCode"></b> <span id="heroSessionType" class="tag"></span></div>
+        <div class="joinUrlRow">
+          <span id="heroJoinUrl" class="joinUrl"></span>
+          <button id="btnCopyJoinUrl" class="ghost small">复制链接</button>
+        </div>
+        <p class="hint">用手机相机直接扫上面的二维码，就会在手机上打开本页并自动连到这台设备。也可以把链接发到另一台设备打开，效果一样。</p>
+        <label class="switchRow">
+          <input type="checkbox" id="chkRememberChannel">
+          <span><b>记住此通道</b>（信任）——打开后，本机每次打开网页都是同一个二维码，其他设备扫一次、并在对方页面勾选「信任此设备」后，以后不用再扫码。关闭则为临时通道：任意一方关掉页面就会断开，下次要重新扫码。</span>
+        </label>
+        <div class="row">
+          <button id="btnRegen" class="ghost danger">结束会话并换新二维码</button>
+        </div>
+        <p class="hint">说明：文件走互联网点对点直传，不经过服务器保存，所以传文件时双方页面都要开着；关掉页面即断开。</p>
+      </section>
+
+      <main id="messages"></main>
+    </div>
+
+    <section id="transfers"></section>
+
+    <footer id="inputBar">
+      <div class="row">
+        <label for="targetSel">发送给：</label>
+        <select id="targetSel"><option value="ALL">所有设备</option></select>
+        <label class="fileBtn">📎 文件<input type="file" id="fileInput" multiple hidden></label>
+        <span class="dropHint">也可以把文件拖到窗口里发送</span>
+      </div>
+      <div class="row growRow">
+        <textarea id="textInput" rows="2" placeholder="输入文字或粘贴网址，Enter 发送（Shift+Enter 换行）"></textarea>
+        <button id="btnSend" class="primary">发送</button>
+      </div>
+    </footer>
+
+    <div id="scanModal" class="modal hidden">
+      <div class="card">
+        <h3>扫描通道二维码</h3>
+        <video id="scanVideo" playsinline muted></video>
+        <canvas id="scanCanvas" hidden></canvas>
+        <p id="scanTip" class="hint">正在打开摄像头…</p>
+        <button id="btnCloseScan" class="ghost">取消</button>
+      </div>
     </div>
   </div>
-</section>
-
-<section id="devicePanel">
-  <div class="panelTitle">通道里的设备 <span id="devCount"></span></div>
-  <div class="row devSelf">
-    <span>本机：</span><span id="selfBadge"></span>
-    <input id="devName" placeholder="给本机起个名字">
-    <button id="btnSaveName" class="ghost small">保存名字</button>
-  </div>
-  <ul id="deviceList"></ul>
-</section>
-
-<main id="messages"></main>
-
-<section id="transfers"></section>
-
-<footer>
-  <div class="row">
-    <label for="targetSel">发送给：</label>
-    <select id="targetSel"><option value="ALL">所有设备</option></select>
-    <label class="fileBtn">📎 文件<input type="file" id="fileInput" multiple hidden></label>
-  </div>
-  <div class="row">
-    <textarea id="textInput" rows="2" placeholder="输入文字或粘贴网址，Enter 发送（Shift+Enter 换行）"></textarea>
-    <button id="btnSend" class="primary">发送</button>
-  </div>
-</footer>
+</div>
 
 <div id="qrModal" class="modal hidden">
   <div class="card">
@@ -113,16 +139,6 @@
     <div id="qrBox"></div>
     <p class="hint">通道码：<b id="qrRoomCode"></b><br>用另一台设备的相机扫码，会直接打开本页并自动加入；也可以在另一台设备打开 Kiwi 后点「扫码加入」。</p>
     <button id="btnCloseQR" class="primary">关闭</button>
-  </div>
-</div>
-
-<div id="scanModal" class="modal hidden">
-  <div class="card">
-    <h3>扫描通道二维码</h3>
-    <video id="scanVideo" playsinline muted></video>
-    <canvas id="scanCanvas" hidden></canvas>
-    <p id="scanTip" class="hint">正在打开摄像头…</p>
-    <button id="btnCloseScan" class="ghost">取消</button>
   </div>
 </div>
 

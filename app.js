@@ -210,6 +210,7 @@ function boot() {
     var ids = Object.keys(roster);
     var onlineCount = ids.filter(function (id) { return roster[id].online !== false; }).length;
     $('devCount').textContent = ids.length ? '（' + onlineCount + ' 台在线 / 共 ' + ids.length + ' 台）' : '';
+    document.body.classList.toggle('hasPeers', onlineCount > 1); // desktop stage: QR hero until a peer is online, then the feed
     var sel = $('targetSel');
     var cur = sel.value;
     sel.innerHTML = '<option value="ALL">所有设备</option>';
@@ -717,6 +718,7 @@ function boot() {
 
   // ----- wire UI -----
   $('btnShowQR').onclick = showQR;
+  $('btnAddDevice').onclick = showQR;
   $('btnCloseQR').onclick = function () { $('qrModal').classList.add('hidden'); };
   $('btnScan').onclick = startScan;
   $('btnCloseScan').onclick = stopScan;
@@ -725,7 +727,7 @@ function boot() {
     if (!info) { alert('通道码格式不对'); return; }
     if (confirm('加入别的通道会离开本机当前通道，确定加入 ' + info.room + ' 吗？')) joinRoom(info);
   };
-  $('btnRoom').onclick = function () { window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  $('btnRoom').onclick = function () { $('messages').scrollTo({ top: 0, behavior: 'smooth' }); };
   $('btnLeave').onclick = leaveToHome;
   $('btnRegen').onclick = function () { if (confirm('结束当前会话并换新二维码？之前扫过旧码的临时设备将需要重新扫码。')) regenerate(); };
   $('btnSkipReconnect').onclick = function () { if (autoProbe) autoProbeFail(); };
@@ -774,6 +776,17 @@ function boot() {
   $('btnSend').onclick = sendText;
   $('textInput').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } });
   $('fileInput').addEventListener('change', function () { if (this.files.length) sendFiles(this.files); this.value = ''; });
+
+  // ----- drag & drop files onto the stage / input bar -----
+  ['stage', 'inputBar'].forEach(function (id) {
+    var el = $(id); if (!el) return;
+    el.addEventListener('dragover', function (e) { e.preventDefault(); $('stage').classList.add('dragOver'); });
+    el.addEventListener('dragleave', function () { $('stage').classList.remove('dragOver'); });
+    el.addEventListener('drop', function (e) {
+      e.preventDefault(); $('stage').classList.remove('dragOver');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) sendFiles(e.dataTransfer.files);
+    });
+  });
 
   // ----- boot -----
   renderSelf(); renderRoster();
