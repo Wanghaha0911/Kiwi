@@ -198,6 +198,8 @@ function boot() {
   var autoProbe = null;    // {room, timer} while auto-reconnecting to a trusted host
   var guestAnnounced = false; // true once the status line has flipped to 已连接 for this join
   var guestStallTimer = null;
+  var guestDialTries = 0; // automatic re-dials of the host during one join
+  var hostReviveTries = 0; // automatic re-dials after the host connection drops mid-session
   var guestInfo = null;    // join payload of the room we are a guest in
   var lastOfflineRooms = {}; // room -> true, remembered so the trusted card keeps its 离线 badge across re-renders
 
@@ -359,8 +361,9 @@ function boot() {
     opts = opts || {};
     conns[conn.peer] = conn;
     conn.on('open', function () {
-      if (opts.registerOnOpen) conn.send({ kind: 'register', secret: secret, device: publicMe() });
+      if (opts.registerOnOpen) { hostReviveTries = 0; conn.send({ kind: 'register', secret: secret, device: publicMe() }); }
       else conn.send({ kind: 'hello', device: publicMe() });
+      reportPath(conn);
     });
     conn.on('data', function (data) { onData(conn, data); });
     conn.on('close', function () { onConnClose(conn); });
@@ -387,6 +390,41 @@ function boot() {
       if (rst) rst.ui.note('已暂停（已收到 ' + fmtSize(rst.received) + '），对方回来后自动续传');
       delete recvByPeer[conn.peer];
     }
+    reviveSoon(conn.peer);
+  }
+  // After a connection opens, check which route won (direct vs relay) and label the guest status
+  // with it — the fastest way to see whether a carrier-network connection went through the relay.
+  function reportPath(conn) {
+    try {
+      var pc = conn.peerConnection;
+      if (!pc || !pc.getStats) return;
+      setTimeout(function () {
+        if (!conn.open) return;
+        pc.getStats().then(function (stats) {
+          var pair = null; var locals = {};
+          stats.forEach(function (r) {
+            if (r.type === 'local-candidate') locals[r.id] = r;
+            if (r.type === 'candidate-pair' && r.nominated && (r.state === 'succeeded' || r.state === 'in-progress')) pair = pair || r;
+          });
+          if (pair && locals[pair.localCandidateId]) {
+            var t = locals[pair.localCandidateId].candidateType;
+            if (!isHost && conn.peer === currentHostPeerId && guestAnnounced) setStatus('已连接 ✔（' + (t === 'relay' ? '中转' : '直连') + '）');
+          }
+        }).catch(function () {});
+      }, 2500);
+    } catch (e) {}
+  }
+  // When a connection drops mid-session, do not sit idle until the user backgrounds/foregrounds
+  // the page: quietly re-dial the host (guest side) and re-drive whatever was paused or queued.
+  function reviveSoon(closedPeerId) {
+    setTimeout(function () {
+      if (!peer || peer.destroyed) return;
+      if (!isHost && guestInfo && closedPeerId === currentHostPeerId && hostReviveTries < 8 && !conns[currentHostPeerId]) {
+        hostReviveTries++;
+        try { var c = peer.connect(currentHostPeerId, { reliable: true }); setupConn(c, { registerOnOpen: true }); } catch (e) {}
+      }
+      flushAllPending();
+    }, 4000);
   }
   function ensureConn(peerId) {
     if (!peerId || peerId === me.peerId) return null;
@@ -459,7 +497,7 @@ function boot() {
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) ensureConn(roster[id].peerId); });
     // If we are a guest, the first roster means the auto-reconnect / join worked.
     if (!isHost && autoProbe) { autoProbeSuccess(); }
-    else if (!isHost && guestInfo && !guestAnnounced) { guestAnnounced = true; setStatus('已连接 ✔'); }
+    else if (!isHost && guestInfo && !guestAnnounced) { guestAnnounced = true; guestDialTries = 0; setStatus('已连接 ✔'); }
     if (!isHost && guestInfo) updateTrustBannerLabel();
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) flushForDevice(id); });
   }
@@ -761,6 +799,32 @@ function boot() {
     if (opts.viaTrust) setStatus('正在重连信任设备（连接 ' + room + '）…');
     else setStatus('正在连接 ' + room + '…');
   }
+  function dialHost() {
+    setStatus('正在连接主机…');
+    clearTimeout(guestStallTimer);
+    guestStallTimer = setTimeout(onGuestStall, 15000);
+    var c = peer.connect(currentHostPeerId, { reliable: true });
+    setupConn(c, { registerOnOpen: true });
+  }
+  // A dial that never opens usually means the direct path is blocked: retry a couple of times
+  // (fresh ICE candidates each round give the relay a chance to allocate), then explain.
+  function onGuestStall() {
+    if (isHost || guestAnnounced || !guestInfo || !peer || peer.destroyed) return;
+    guestDialTries++;
+    if (guestDialTries <= 2) {
+      var old = conns[currentHostPeerId];
+      if (old && !old.open) { try { old.close(); } catch (e) {} delete conns[currentHostPeerId]; old = null; }
+      if (!old) {
+        setStatus('正在连接主机…（第 ' + (guestDialTries + 1) + ' 次尝试）');
+        var c = peer.connect(currentHostPeerId, { reliable: true });
+        setupConn(c, { registerOnOpen: true });
+      }
+      clearTimeout(guestStallTimer);
+      guestStallTimer = setTimeout(onGuestStall, 15000);
+    } else {
+      setStatus('连接有点久：确认对方页面开着、连接码一致；用流量时先换 WiFi 试试');
+    }
+  }
   function startPeer(fixedId, hostPeerId) {
     if (peer) { try { peer.destroy(); } catch (e) {} }
     conns = {}; connDevice = {};
@@ -772,13 +836,8 @@ function boot() {
       enterRoomUI(); renderSelf(); renderRoster();
       if (isHost) setStatus(rememberChannel ? '已记住连接已打开，扫码过的信任设备可直接重连' : '临时连接已打开，等其他设备扫码加入');
       else {
-        setStatus('正在连接主机…');
-        clearTimeout(guestStallTimer);
-        guestStallTimer = setTimeout(function () {
-          if (!isHost && !guestAnnounced) setStatus('连接有点久：确认对方页面开着、连接码一致；用流量时先换 WiFi 试试');
-        }, 15000);
-        var c = peer.connect(hostPeerId, { reliable: true });
-        setupConn(c, { registerOnOpen: true });
+        guestDialTries = 0;
+        dialHost();
       }
     });
     peer.on('connection', function (conn) { setupConn(conn); });
