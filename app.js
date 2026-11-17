@@ -341,6 +341,8 @@ function boot() {
     return { box: d, bar: d.querySelector('.progress>i'), pct: d.querySelector('.pct'),
       set: function (done, total) { var p = total ? Math.floor(done * 100 / total) : 100; this.bar.style.width = p + '%'; this.pct.textContent = p + '%（' + fmtSize(done) + ' / ' + fmtSize(total) + '）'; },
       note: function (t) { this.pct.textContent = t; },
+      phase: function (label, frac) { var p = Math.max(0, Math.min(100, Math.floor(frac * 100))); this.bar.style.width = p + '%'; this.pct.textContent = label + '… ' + p + '%'; },
+      setFrac: function (frac, done, total, suffix) { var p = Math.floor(frac * 100); this.bar.style.width = p + '%'; this.pct.textContent = p + '%（' + fmtSize(done) + ' / ' + fmtSize(total) + (suffix ? ' · ' + suffix : '') + '）'; },
       done: function (t) { this.pct.textContent = t || '完成'; var self = this; setTimeout(function () { self.box.remove(); }, 4000); } };
   }
 
@@ -565,12 +567,28 @@ function boot() {
   function sendMeta(rec, conn) {
     conn.send({ kind: 'file-meta', transferId: rec.transferId, name: rec.file.name, size: rec.file.size, mime: rec.file.type || 'application/octet-stream', from: publicMe(), ts: Date.now() });
   }
+  function fmtSpeed(bps) {
+    if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+    if (bps >= 1024) return Math.round(bps / 1024) + ' KB/s';
+    return Math.floor(bps) + ' B/s';
+  }
+  // One unified progress bar per file: 0-50% = preparing the file (reading it from the device),
+  // 50-100% = actually sending, with a live speed readout.
   async function streamOutTransfer(rec, conn, myDrive) {
+    var prepTimer = null;
+    function stopPrep() { if (prepTimer) { clearInterval(prepTimer); prepTimer = null; } }
+    function uiProgress() {
+      var frac = rec.file.size ? (0.5 + 0.5 * (rec.sentBytes / rec.file.size)) : 1;
+      rec.ui.setFrac(frac, rec.sentBytes, rec.file.size, rec._spd ? fmtSpeed(rec._spd) : '');
+    }
     try {
       await waitOpen(conn);
       if (!conn.open || rec.driveId !== myDrive) return; // superseded by a newer drive, or the conn died instantly
       updateWakeLock();
       if (rec.nextIndex === 0) {
+        var f = 0;
+        rec.ui.phase('正在准备文件', 0);
+        prepTimer = setInterval(function () { f += (0.92 - f) * 0.07; rec.ui.phase('正在准备文件', f * 0.5); }, 180);
         sendMeta(rec, conn);
       } else {
         var startAt = await queryResume(rec, conn);
@@ -589,7 +607,9 @@ function boot() {
           conn.send({ kind: 'file-resume-begin', transferId: rec.transferId, fromChunk: startAt });
           rec.ui.note('已重新接上，从 ' + fmtSize(rec.sentBytes) + ' 处继续传');
         }
+        uiProgress();
       }
+      rec._win = [];
       var dc = conn.dataChannel;
       for (var i = rec.nextIndex; i < rec.plan.length; i++) {
         while (dc && dc.bufferedAmount > 4 * 1024 * 1024) { if (!conn.open) throw new Error('closed'); await new Promise(function (r) { setTimeout(r, 40); }); }
@@ -597,16 +617,23 @@ function boot() {
         var buf = await rec.file.slice(rec.plan[i].start, rec.plan[i].end).arrayBuffer(); // one chunk at a time, never the whole file
         if (!conn.open) throw new Error('closed');
         conn.send(buf);
+        stopPrep();
         rec.nextIndex = i + 1;
         rec.sentBytes += (rec.plan[i].end - rec.plan[i].start);
-        if (i % 16 === 0 || i === rec.plan.length - 1) rec.ui.set(rec.sentBytes, rec.file.size);
+        var now = Date.now();
+        rec._win.push({ t: now, b: rec.sentBytes });
+        while (rec._win.length > 2 && now - rec._win[0].t > 3000) rec._win.shift();
+        if (rec._win.length > 1) { var w0 = rec._win[0]; var dt = (now - w0.t) / 1000; if (dt > 0.3) rec._spd = (rec.sentBytes - w0.b) / dt; }
+        if (i % 4 === 0 || i === rec.plan.length - 1) uiProgress();
       }
       while (dc && dc.bufferedAmount > 0) { if (!conn.open) throw new Error('closed'); await new Promise(function (r) { setTimeout(r, 40); }); }
       conn.send({ kind: 'file-end', transferId: rec.transferId });
+      stopPrep();
       rec.state = 'done';
       rec.ui.set(rec.file.size, rec.file.size); rec.ui.done('已发送 ✔');
       delete outTransfers[rec.transferId];
     } catch (e) {
+      stopPrep();
       if (rec.driveId === myDrive && rec.state !== 'done') { rec.state = 'paused'; rec.ui.note('已暂停（已传 ' + fmtSize(rec.sentBytes) + '），对方回来后自动续传'); }
     }
     updateWakeLock();

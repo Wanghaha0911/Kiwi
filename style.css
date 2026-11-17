@@ -116,7 +116,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
 /* ---------- desktop: fixed app-window layout (>=900px) ---------- */
 
 /* ---------- app-window shell (all widths) + mobile drawer ---------- */
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;overflow:hidden;background:var(--bg)}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh}
 #mainArea{flex:1;min-height:0}
 #stage{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px;overflow:hidden}
