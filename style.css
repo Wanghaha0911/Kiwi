@@ -11,7 +11,7 @@ button.primary:hover{background:var(--green-dark);border-color:var(--green-dark)
 button.ghost{background:var(--tint)}
 button.small{padding:4px 9px;font-size:12.5px}
 button.danger{color:#b3261e}
-input,select,textarea{border:1px solid #c9d4bd;border-radius:9px;padding:8px 10px;font-size:14px;background:#fff;color:var(--ink)}
+input,select,textarea{border:1px solid #c9d4bd;border-radius:9px;padding:8px 10px;font-size:16px;background:#fff;color:var(--ink)}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mid);box-shadow:0 0 0 3px rgba(139,212,80,.22)}
 .hint{color:var(--muted);font-size:13px;line-height:1.55}
 .hidden{display:none!important}
@@ -110,7 +110,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mi
 .modal{position:fixed;inset:0;background:rgba(38,45,32,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:14px}
 .modal .card{background:#fff;border-radius:16px;padding:20px;max-width:92vw;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.22)}
 .modal .card h3{margin:0 0 12px;color:var(--brown)}
-#qrBox svg{width:240px;height:240px}
+#qrBox svg{width:176px;height:176px}
 #scanVideo{width:300px;max-width:80vw;border-radius:10px;background:#000}
 
 /* ---------- desktop: fixed app-window layout (>=900px) ---------- */
@@ -137,6 +137,8 @@ body.hasPeers .mobileDot{background:#58b531}
   #sidebar{position:fixed;top:0;left:0;width:min(320px,86vw);height:100dvh;z-index:40;transform:translateX(-105%);transition:transform .25s ease;display:flex;flex-direction:column;overflow-y:auto;border-bottom:0;border-right:1px solid var(--border)}
   body.drawerOpen #sidebar{transform:none;box-shadow:10px 0 34px rgba(40,50,30,.28)}
   .sideFoot{margin-top:auto;padding-top:14px}
+  #qrBox svg{width:min(168px,52vw);height:min(168px,52vw)}
+  .joinUrl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80vw}
 }
 
 @media (min-width:700px){
