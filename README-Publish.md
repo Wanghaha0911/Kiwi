@@ -88,3 +88,36 @@
 - 页面必须跑在 HTTPS 下才能用摄像头扫码和 WebRTC —— GitHub Pages 自带 HTTPS，
   按上面的方式发布就没问题。在电脑本机双击打开 index.html 是测不了连接的，
   请始终通过发布后的网址使用。
+---
+
+## 七、手机流量（4G/5G）连不上？—— TURN 中转说明
+
+**现象**：Wi-Fi 下能连，切到 4G/5G 就一直「正在连接主机…」或提示没有中转。
+
+**原因**：手机流量基本都在运营商 CGNAT 后面，两台设备之间经常打不了洞（直连失败），
+必须靠 TURN 服务器转发。旧版代码里写的是：
+
+```
+turn:openrelay.metered.ca     用户名/密码都是 openrelayproject
+```
+
+这个公开中转账号已经被 Metered 官方下线，域名现在解析到 `192.0.2.1`
+（RFC 5737 保留的测试地址，等于黑洞），实际上根本没有中转 —— 所以 5G 下必然失败。
+这不是 GitHub Pages 或页面代码写错，而是中转服务器没了。
+
+**修复办法（不用改代码）**：
+
+1. 手机/电脑打开 `https://wanghaha0911.github.io/Kiwi/ice-test.html`
+   （主页面左侧菜单底部也有「网络诊断 / 中转设置」入口）。
+2. 按页面提示注册免费 TURN（Metered，免费额度约 20GB/月），在 Dashboard 拿到
+   `Username` / `Credential`。
+3. 按 `turn:global.relay.metered.ca:443|用户名|密码` 的格式填进去。
+4. 点「开始检测」，确认表格里出现 **relay** 行；再点「保存并用于 Kiwi」。
+5. 回到主页面刷新，重新连接一次。
+
+配置只存在本机浏览器 localStorage 里，不会上传；每台设备各配一次。
+旧的 STUN 列表也换成了国内可用的节点（B 站 / 芒果 / 小米 / Cloudflare / Google）。
+
+想一次给所有访问者配好：把 `ice-config.js` 里的 `TURN_SERVERS` 换成你自己的
+coturn 地址和账号，随网页一起发布即可（写在源码里等于公开凭据，只适合自建服务）。
+生产环境更推荐自建 coturn，或用 Cloudflare Realtime / Twilio 的 TURN。

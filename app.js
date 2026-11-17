@@ -145,17 +145,30 @@ if (typeof document !== 'undefined' && typeof Peer !== 'undefined') {
 
 function boot() {
   var $ = function (id) { return document.getElementById(id); };
+  // ICE：STUN 负责打洞，TURN 负责中转。具体列表在 ice-config.js 里，也可以在 ice-test.html 里配置（存在本机）。
+  // 注意：旧的 turn:openrelay.metered.ca + openrelayproject 公开账号已被官方下线，
+  //       该域名现在解析到 192.0.2.1（测试用保留地址），等于根本没有中转。
+  var DEFAULT_ICE = [
+    { urls: 'stun:stun.chat.bilibili.com:3478' },
+    { urls: 'stun:stun.hitv.com:3478' },
+    { urls: 'stun:stun.miwifi.com:3478' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:stun.l.google.com:19302' }
+  ];
+  function iceServers() {
+    try {
+      if (typeof window.kiwiIceServers === 'function') {
+        var list = window.kiwiIceServers();
+        if (list && list.length) return list;
+      }
+    } catch (e) {}
+    return DEFAULT_ICE;
+  }
   var PEER_OPTS = {
     host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
-    config: { iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-    ] }
+    config: { iceServers: iceServers() }
   };
+  var signalDrops = 0; // 信令服务器连续断线次数
 
   // ----- persistent identity (survives everything; it is just "who am I") -----
   var deviceId = localStorage.getItem('kiwi_deviceId');
@@ -205,6 +218,37 @@ function boot() {
 
   function setStatus(t) { $('connStatus').textContent = t; }
   function publicMe() { return { deviceId: me.deviceId, name: me.name, platform: me.platform, icon: me.icon, color: me.color, peerId: me.peerId, online: true, avatarImg: me.avatarImg || null }; }
+
+  // ----- 中转（TURN）自检 -----
+  // 手机流量基本都在运营商 CGNAT 后面，双方常常无法直连，只能靠 TURN 转发。
+  // 先收集一次 ICE 候选，确认本机到底能不能拿到 relay 候选，连不上时才能给出准确提示。
+  var relayState = { checked: false, hasRelay: false, turnCount: 0 };
+  function probeRelay(cb) {
+    cb = cb || function () {};
+    var servers = PEER_OPTS.config.iceServers || [];
+    relayState.turnCount = servers.filter(function (s) { return /^turns?:/i.test(String(s.urls)); }).length;
+    if (relayState.checked) return cb(relayState);
+    if (typeof window.RTCPeerConnection === 'undefined') { relayState.checked = true; return cb(relayState); }
+    relayState.checked = true;
+    var pc = null, finished = false;
+    function finish(hasRelay) {
+      if (finished) return;
+      finished = true;
+      relayState.hasRelay = !!hasRelay;
+      try { if (pc) pc.close(); } catch (e) {}
+      cb(relayState);
+    }
+    try {
+      pc = new RTCPeerConnection({ iceServers: servers });
+      pc.createDataChannel('kiwi-relay-probe');
+      pc.onicecandidate = function (e) {
+        if (!e.candidate) return finish(relayState.hasRelay);
+        if (/(^|\s)typ relay(\s|$)/.test(' ' + e.candidate.candidate + ' ')) finish(true);
+      };
+      pc.createOffer().then(function (offer) { return pc.setLocalDescription(offer); }).catch(function () { finish(false); });
+      setTimeout(function () { finish(relayState.hasRelay); }, 6000);
+    } catch (e) { finish(false); }
+  }
   function joinUrl() { return buildJoinUrl(location.href, room, secret); }
 
   function escapeHtml(s) {
@@ -822,7 +866,13 @@ function boot() {
       clearTimeout(guestStallTimer);
       guestStallTimer = setTimeout(onGuestStall, 15000);
     } else {
-      setStatus('连接有点久：确认对方页面开着、连接码一致；用流量时先换 WiFi 试试');
+      if (!relayState.turnCount) {
+        setStatus('连不上：没有配置中转服务器（TURN）。手机流量下双方常常无法直连，请点左下「网络诊断」配置 TURN');
+      } else if (relayState.checked && !relayState.hasRelay) {
+        setStatus('连不上：中转服务器连不上（TURN 不可用），请到「网络诊断」检查地址 / 用户名 / 密码');
+      } else {
+        setStatus('连接有点久：确认对方页面开着、连接码一致；仍不行就到「网络诊断」检查中转');
+      }
     }
   }
   function startPeer(fixedId, hostPeerId) {
@@ -831,6 +881,7 @@ function boot() {
     if (!isHost) { roster = {}; roster[deviceId] = publicMe(); }
     peer = fixedId ? new Peer(fixedId, PEER_OPTS) : new Peer(PEER_OPTS);
     peer.on('open', function (id) {
+      signalDrops = 0;
       me.peerId = id;
       if (roster[deviceId]) roster[deviceId].peerId = id; else roster[deviceId] = publicMe();
       enterRoomUI(); renderSelf(); renderRoster();
@@ -842,17 +893,30 @@ function boot() {
     });
     peer.on('connection', function (conn) { setupConn(conn); });
     peer.on('error', function (err) {
-      if (err.type === 'unavailable-id') {
+      var type = (err && err.type) || 'unknown';
+      if (type === 'unavailable-id') {
         if (isHost) { alert('这个连接码已被占用（可能你在另一个标签页/窗口也打开了 Kiwi 并记住了同一连接）。请关掉多余的页面，或点「结束会话并换新二维码」。'); setStatus('连接码被占用：可能另一个页面正用同一连接当主机'); }
-      } else if (err.type === 'peer-unavailable') {
+      } else if (type === 'peer-unavailable') {
         if (autoProbe) { autoProbeFail(); }
         else if (!isHost) setStatus('对方未打开页面，先让对方打开 Kiwi');
         else setStatus('有一台离线设备暂时联系不上');
+      } else if (type === 'browser-incompatible') {
+        setStatus('这个浏览器不支持 WebRTC，请换新版的 Chrome / Safari / Edge');
+      } else if (type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed' || type === 'ssl-unavailable') {
+        // 信令服务器连不上：移动网络拦截 0.peerjs.com 时常见
+        setStatus('连不上信令服务器（0.peerjs.com 可能被网络拦截），正在自动重试…');
+        setTimeout(function () { if (peer && !peer.destroyed && peer.disconnected) { try { peer.reconnect(); } catch (e) {} } }, 2500);
+      } else if (type === 'webrtc') {
+        setStatus('WebRTC 初始化失败：' + ((err && err.message) || '未知原因'));
       } else {
-        setStatus('连接问题：' + err.type + '（检查网络后刷新页面重试）');
+        setStatus('连接问题：' + type + ((err && err.message) ? '（' + err.message + '）' : '') + '，刷新页面可重试');
       }
     });
-    peer.on('disconnected', function () { setStatus('与信令服务器断开，正在重连…'); try { peer.reconnect(); } catch (e) {} });
+    peer.on('disconnected', function () {
+      signalDrops++;
+      setStatus(signalDrops >= 3 ? '反复与信令服务器断开（0.peerjs.com 可能被网络拦截），正在重试…' : '与信令服务器断开，正在重连…');
+      setTimeout(function () { try { peer.reconnect(); } catch (e) {} }, Math.min(1000 * signalDrops, 5000));
+    });
   }
   function regenerate() {
     var keepRemember = rememberChannel;
@@ -1146,6 +1210,7 @@ function boot() {
 
   // ----- boot -----
   renderSelf(); renderRoster(); restoreOutbox();
+  probeRelay(); // 后台自检中转能力，决定连不上时的提示语
   var hashInfo = parseJoinFromHash(location.hash);
   if (hashInfo) {
     // Arrived by scanning the QR (system camera opened this page URL).

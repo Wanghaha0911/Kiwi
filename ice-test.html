@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f7f8f5">
+<title>Kiwi · 网络诊断 / 中转设置</title>
+<style>
+  :root { --green:#5b8c3e; --greenDark:#3f6b2a; --line:#e2e6dc; --ink:#2c3327; --muted:#7a8474; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:16px 14px 40px; background:#f7f8f5; color:var(--ink);
+         font:16px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:22px 0 8px; }
+  p.lead { margin:0 0 14px; color:var(--muted); font-size:13px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px; margin:0 0 14px; }
+  code { background:#eef2e9; padding:1px 5px; border-radius:5px; font-size:12.5px; word-break:break-all; }
+  textarea { width:100%; min-height:96px; padding:10px; border:1px solid var(--line); border-radius:10px;
+             font:13px/1.5 ui-monospace,Consolas,monospace; resize:vertical; background:#fcfdfa; color:var(--ink); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  button { font:inherit; font-size:14.5px; padding:10px 16px; border-radius:10px; border:1px solid var(--line);
+           background:#fff; color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--green); border-color:var(--green); color:#fff; font-weight:600; }
+  button.primary:active { background:var(--greenDark); }
+  button:disabled { opacity:.55; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  td.mono { font-family:ui-monospace,Consolas,monospace; word-break:break-all; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11.5px; font-weight:600; white-space:nowrap; }
+  .b-relay { background:#e6f4dd; color:#2f6b18; }
+  .b-srflx { background:#e8effa; color:#2b4c86; }
+  .b-host  { background:#f1f1ee; color:#666; }
+  .b-none  { background:#fdeaea; color:#a12b2b; }
+  .verdict { font-size:14.5px; font-weight:600; margin-top:10px; }
+  .ok { color:#2f6b18; } .warn { color:#9a6a12; } .err { color:#a12b2b; }
+  .hint { font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  a.back { display:inline-block; margin-top:6px; color:var(--green); font-size:14px; text-decoration:none; }
+  ol.steps { margin:6px 0 0 18px; padding:0; font-size:13.5px; color:#4a5540; }
+  ol.steps li { margin:3px 0; }
+</style>
+</head>
+<body>
+<h1>网络诊断 / 中转设置</h1>
+<p class="lead">这个页面用来检查本机能否建立 WebRTC 连接，以及是否拿到了 TURN 中转（<b>relay</b>）候选。手机流量（4G/5G）基本都在运营商 CGNAT 后面，没有中转就很可能一直“正在连接主机…”。</p>
+
+<div class="card">
+  <h2 style="margin-top:0">1. 当前网络</h2>
+  <div id="netInfo" class="hint">读取中…</div>
+  <table id="candTable" style="margin-top:10px">
+    <thead><tr><th>类型</th><th>协议</th><th>本机候选地址</th></tr></thead>
+    <tbody><tr><td colspan="3" class="hint">点下面的“开始检测”后显示</td></tr></tbody>
+  </table>
+  <div id="verdict" class="verdict"></div>
+  <div class="row">
+    <button id="btnTest" class="primary">开始检测</button>
+    <button id="btnCopy">复制报告</button>
+  </div>
+  <p class="hint">检测最多等 9 秒。看到 <b>relay</b> 才算中转可用；只有 <b>srflx</b> 表示只打通了 NAT 发现，5G 下仍可能连不上。</p>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">2. TURN 中转配置</h2>
+  <p class="hint">每行一个，格式：<code>地址|用户名|密码</code>，例如</p>
+  <p class="hint"><code>turn:global.relay.metered.ca:443|用户名|密码</code><br>
+     <code>turn:global.relay.metered.ca:443?transport=tcp|用户名|密码</code><br>
+     <code>turns:global.relay.metered.ca:443?transport=tcp|用户名|密码</code></p>
+  <textarea id="turnInput" spellcheck="false" placeholder="turn:你的服务器:443|用户名|密码"></textarea>
+  <div class="row">
+    <button id="btnSave" class="primary">保存并用于 Kiwi</button>
+    <button id="btnClear">清空</button>
+  </div>
+  <p class="hint" id="saveTip">保存后主页面（index.html）会自动读取本机这份配置。配置只存在这台设备的浏览器里，不上传。</p>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">3. 怎么拿到免费 TURN</h2>
+  <ol class="steps">
+    <li>注册 Metered（免费额度，约 20GB/月）：<code>metered.ca/stun-turn</code></li>
+    <li>在 Dashboard 的 TURN 页面复制 <b>Username / Credential</b>，地址用 <code>global.relay.metered.ca</code></li>
+    <li>按上面的格式填进来 → 保存 → 回到本页点“开始检测”，确认出现 <b>relay</b></li>
+  </ol>
+  <p class="hint">旧的 <code>openrelay.metered.ca</code> 公开账号已被官方下线（现在解析到 192.0.2.1，等于黑洞），所以之前写死在代码里的中转是完全无效的。</p>
+</div>
+
+<p><a class="back" href="index.html">← 返回 Kiwi</a></p>
+
+<script src="ice-config.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var STUN = [
+    'stun:stun.chat.bilibili.com:3478',
+    'stun:stun.hitv.com:3478',
+    'stun:stun.miwifi.com:3478',
+    'stun:stun.cloudflare.com:3478',
+    'stun:stun.l.google.com:19302'
+  ];
+  var lastReport = '';
+
+  function parseTurn(text) {
+    var out = [];
+    String(text || '').split(/\r?\n/).forEach(function (line) {
+      line = line.trim();
+      if (!line || line.charAt(0) === '#') return;
+      var p = line.split('|');
+      var url = (p[0] || '').trim();
+      if (!url) return;
+      if (!/^(stun|turn|turns):/i.test(url)) url = 'turn:' + url;
+      out.push({ urls: url, username: (p[1] || '').trim(), credential: (p[2] || '').trim() });
+    });
+    return out;
+  }
+
+  function fmtTurn(list) {
+    return (list || []).map(function (s) {
+      return String(s.urls) + '|' + (s.username || '') + '|' + (s.credential || '');
+    }).join('\n');
+  }
+
+  function loadSaved() {
+    try {
+      var v = JSON.parse(localStorage.getItem('kiwi_ice_servers') || '[]');
+      $('turnInput').value = fmtTurn(v);
+    } catch (e) {}
+  }
+
+  function netText() {
+    var bits = [];
+    var c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (c) {
+      if (c.type) bits.push('类型：' + c.type);
+      if (c.effectiveType) bits.push('速率档位：' + c.effectiveType);
+      if (c.downlink) bits.push('下行约 ' + c.downlink + ' Mbps');
+    }
+    if (!bits.length) bits.push('浏览器没有暴露网络类型（iPhone 常见）');
+    bits.push('在线：' + (navigator.onLine ? '是' : '否'));
+    return bits.join(' · ');
+  }
+
+  function typeOf(cand) {
+    var m = /(^|\s)typ (\w+)(\s|$)/.exec(' ' + cand + ' ');
+    return m ? m[2] : '?';
+  }
+  function protoOf(cand) { var m = /^candidate:\S+ \d+ (\w+)/.exec(cand); return m ? m[1].toUpperCase() : '?'; }
+  function addrOf(cand) {
+    var p = String(cand).split(' ');
+    if (p.length < 5) return cand;
+    var addr = p[4], port = p[5];
+    return addr + ':' + port;
+  }
+
+  function runTest(servers, label) {
+    return new Promise(function (resolve) {
+      if (typeof window.RTCPeerConnection === 'undefined') return resolve({ err: '浏览器不支持 WebRTC' });
+      var pc, found = {}, order = ['host', 'srflx', 'prflx', 'relay'], done = false;
+      var started = Date.now();
+      function finish(reason) {
+        if (done) return; done = true;
+        try { pc.close(); } catch (e) {}
+        resolve({ found: found, order: order, ms: Date.now() - started, reason: reason, label: label });
+      }
+      try {
+        pc = new RTCPeerConnection({ iceServers: servers });
+      } catch (e) { return resolve({ err: '创建 RTCPeerConnection 失败：' + e.message }); }
+      pc.createDataChannel('kiwi-diag');
+      pc.onicecandidate = function (e) {
+        if (!e.candidate) return finish('收集完成');
+        var c = e.candidate.candidate, t = typeOf(c);
+        if (!found[t]) found[t] = { count: 0, sample: addrOf(c), proto: protoOf(c) };
+        found[t].count++;
+        if (found.relay) finish('已拿到 relay');
+      };
+      pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function (e) { finish('创建 offer 失败：' + e.message); });
+      setTimeout(function () { finish('等待超时'); }, 9000);
+    });
+  }
+
+  function renderTable(res) {
+    var tb = $('candTable').querySelector('tbody');
+    tb.innerHTML = '';
+    if (!res || res.err) { tb.innerHTML = '<tr><td colspan="3" class="hint err">' + (res && res.err || '检测失败') + '</td></tr>'; return; }
+    var names = { host: '本机地址 host', srflx: '公网映射 srflx', prflx: '对端反射 prflx', relay: '中转 relay' };
+    var any = false;
+    res.order.forEach(function (t) {
+      var it = res.found[t];
+      if (!it) return;
+      any = true;
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td><span class="badge ' + (t === 'relay' ? 'b-relay' : t === 'srflx' ? 'b-srflx' : 'b-host') + '">' + names[t] + '</span></td>' +
+        '<td>' + it.proto + '</td><td class="mono">' + it.sample + ' ×' + it.count + '</td>';
+      tb.appendChild(tr);
+    });
+    if (!any) tb.innerHTML = '<tr><td colspan="3" class="hint err">一个候选都没收集到：STUN 也不通，网络可能拦了 UDP</td></tr>';
+  }
+
+  function verdictText(res) {
+    if (!res || res.err) return { cls: 'err', text: '❌ ' + (res && res.err || '检测失败') };
+    var hasTurn = (res.turnCount || 0) > 0;
+    if (res.found.relay) return { cls: 'ok', text: '✅ 已拿到 relay：中转可用，手机流量下应该能连上（用时 ' + (res.ms / 1000).toFixed(1) + ' 秒）' };
+    if (hasTurn) return { cls: 'err', text: '❌ 配了 ' + res.turnCount + ' 个 TURN，但没拿到 relay：地址/端口/用户名/密码有误，或网络封了 TURN 端口' };
+    return { cls: 'warn', text: '⚠️ 没有配 TURN，只有 STUN。Wi-Fi 下可能能连，5G / 4G 下经常连不上' };
+  }
+
+  $('btnTest').onclick = function () {
+    var turns = parseTurn($('turnInput').value);
+    var servers = STUN.map(function (u) { return { urls: u }; }).concat(turns);
+    $('btnTest').disabled = true;
+    $('verdict').textContent = '检测中…（最多 9 秒）';
+    $('verdict').className = 'verdict';
+    runTest(servers, 'full').then(function (res) {
+      res.turnCount = turns.length;
+      renderTable(res);
+      var v = verdictText(res);
+      $('verdict').textContent = v.text;
+      $('verdict').className = 'verdict ' + v.cls;
+      lastReport = 'Kiwi 网络诊断\n时间: ' + new Date().toLocaleString() + '\n网络: ' + netText() + '\nTURN 条数: ' + turns.length +
+        '\n候选: ' + JSON.stringify(res.found || {}) + '\n结论: ' + v.text + '\nUA: ' + navigator.userAgent;
+      $('btnTest').disabled = false;
+    });
+  };
+
+  $('btnSave').onclick = function () {
+    var turns = parseTurn($('turnInput').value);
+    var bad = turns.filter(function (s) { return !s.username || !s.credential; });
+    if (bad.length) { $('saveTip').textContent = '有 ' + bad.length + ' 条缺少用户名或密码，已忽略（只保存完整的）。'; }
+    else $('saveTip').textContent = '已保存 ' + turns.length + ' 条 TURN 配置，主页面会自动使用。';
+    window.kiwiSaveIceServers(turns);
+    $('turnInput').value = fmtTurn(JSON.parse(localStorage.getItem('kiwi_ice_servers') || '[]'));
+  };
+  $('btnClear').onclick = function () {
+    localStorage.removeItem('kiwi_ice_servers');
+    $('turnInput').value = '';
+    $('saveTip').textContent = '已清空 TURN 配置，现在只用 STUN。';
+  };
+  $('btnCopy').onclick = function () {
+    if (!lastReport) { $('btnCopy').textContent = '先点“开始检测”'; setTimeout(function () { $('btnCopy').textContent = '复制报告'; }, 1500); return; }
+    var done = function () { $('btnCopy').textContent = '已复制 ✓'; setTimeout(function () { $('btnCopy').textContent = '复制报告'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(lastReport).then(done, done);
+    else done();
+  };
+
+  $('netInfo').textContent = netText();
+  loadSaved();
+})();
+</script>
+</body>
+</html>
