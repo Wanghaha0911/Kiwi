@@ -165,7 +165,7 @@ function boot() {
   function saveTrustedHosts(l) { localStorage.setItem('kiwi_trusted_hosts', JSON.stringify(l)); }
   function upsertTrustedHost(info, label) {
     var list = getTrustedHosts().filter(function (h) { return h.room !== info.room; });
-    list.unshift({ room: info.room, hostPeerId: info.hostPeerId, secret: info.secret, hostLabel: label || ('通道 ' + info.room), savedAt: Date.now() });
+    list.unshift({ room: info.room, hostPeerId: info.hostPeerId, secret: info.secret, hostLabel: label || ('连接 ' + info.room), savedAt: Date.now() });
     saveTrustedHosts(list.slice(0, 8));
   }
   function removeTrustedHost(roomCode) { saveTrustedHosts(getTrustedHosts().filter(function (h) { return h.room !== roomCode; })); }
@@ -274,7 +274,7 @@ function boot() {
     list.forEach(function (h) {
       var li = document.createElement('li');
       var off = offlineRooms && offlineRooms[h.room];
-      li.innerHTML = '<span class="avatar" style="background:' + colorFromId(h.room) + '">🥝</span><b>' + escapeHtml(h.hostLabel || ('通道 ' + h.room)) + '</b><span>通道 ' + escapeHtml(h.room) + '</span>' +
+      li.innerHTML = '<span class="avatar" style="background:' + colorFromId(h.room) + '">🥝</span><b>' + escapeHtml(h.hostLabel || ('连接 ' + h.room)) + '</b><span>通道 ' + escapeHtml(h.room) + '</span>' +
         (off ? '<span class="offTag">对方未打开页面</span>' : '') +
         '<button class="ghost small" data-reconnect="' + escapeHtml(h.room) + '">重连</button>' +
         '<button class="ghost small danger" data-forget="' + escapeHtml(h.room) + '">忘记此设备</button>';
@@ -444,13 +444,13 @@ function boot() {
   async function sendText() {
     var text = $('textInput').value.trim();
     if (!text) return;
-    if (!room) { alert('页面还在准备通道，稍等一秒再发'); return; }
+    if (!room) { alert('页面还在准备连接，稍等一秒再发'); return; }
     var payload = { kind: 'text', msgId: 'm-' + Date.now() + '-' + randomCode(4, 'abcdefghijklmnopqrstuvwxyz0123456789'), text: text, from: publicMe(), ts: Date.now() };
     seen[payload.msgId] = 1;
     addMsg({ text: text, from: me, ts: payload.ts, mine: true });
     $('textInput').value = '';
     var list = targetConns($('targetSel').value);
-    if (!list.length) setStatus('通道里暂时没有其他在线设备（对方需要打开页面并加入）');
+    if (!list.length) setStatus('暂时没有其他在线设备（对方需要打开页面并加入）');
     for (var i = 0; i < list.length; i++) { try { await waitOpen(list[i]); list[i].send(payload); } catch (e) { setStatus('有一台设备暂时连不上（需同时在线）'); } }
   }
 
@@ -480,10 +480,10 @@ function boot() {
     return sendQueues[conn.peer];
   }
   async function sendFiles(files) {
-    if (!room) { alert('页面还在准备通道，稍等一秒再发'); return; }
+    if (!room) { alert('页面还在准备连接，稍等一秒再发'); return; }
     var target = $('targetSel').value;
     var list = targetConns(target);
-    if (!list.length) { alert('通道里还没有其他在线设备，等对方打开 Kiwi 页面并加入后再发（需要同时在线）'); return; }
+    if (!list.length) { alert('还没有其他在线设备，等对方打开 Kiwi 页面并加入后再发（需要同时在线）'); return; }
     for (var c = 0; c < list.length; c++) {
       var label = (connDevice[list[c].peer] && roster[connDevice[list[c].peer]] && roster[connDevice[list[c].peer]].name) || list[c].peer;
       for (var f = 0; f < files.length; f++) { sendFilesToConn(list[c], files[f], target === 'ALL' ? '所有设备' : label); }
@@ -522,10 +522,6 @@ function boot() {
 
   // ----- Session lifecycle -----
   function enterRoomUI() {
-    $('inRoom').classList.remove('hidden');
-    $('roomCode').textContent = room;
-    $('hostTag').textContent = isHost ? '本机是通道主机' : '已加入别人的通道';
-    $('btnLeave').classList.toggle('hidden', isHost);
     if (isHost) {
       $('hostHero').classList.remove('hidden');
       $('joinBanner').classList.add('hidden');
@@ -543,7 +539,7 @@ function boot() {
     $('heroQrBox').innerHTML = qr.createSvgTag({ cellSize: 5, margin: 10, scalable: true });
     $('heroRoomCode').textContent = room;
     $('heroJoinUrl').textContent = joinUrl();
-    $('heroSessionType').textContent = rememberChannel ? '已记住通道（信任）' : '临时会话（关页面即失效）';
+    $('heroSessionType').textContent = rememberChannel ? '已记住连接（信任）' : '临时会话（关页面即失效）';
     $('chkRememberChannel').checked = rememberChannel;
   }
   function becomeHost(channel, persisted) {
@@ -565,8 +561,8 @@ function boot() {
     isHost = false; guestInfo = info;
     room = info.room; secret = info.secret; currentHostPeerId = info.hostPeerId;
     startPeer(null, info.hostPeerId);
-    if (opts.viaTrust) setStatus('正在重连信任设备（通道 ' + room + '）…');
-    else setStatus('正在连接通道 ' + room + '…');
+    if (opts.viaTrust) setStatus('正在重连信任设备（连接 ' + room + '）…');
+    else setStatus('正在连接 ' + room + '…');
   }
   function startPeer(fixedId, hostPeerId) {
     if (peer) { try { peer.destroy(); } catch (e) {} }
@@ -577,7 +573,7 @@ function boot() {
       me.peerId = id;
       if (roster[deviceId]) roster[deviceId].peerId = id; else roster[deviceId] = publicMe();
       enterRoomUI(); renderSelf(); renderRoster();
-      if (isHost) setStatus(rememberChannel ? '已记住通道已打开，扫码过的信任设备可直接重连' : '临时通道已打开，等其他设备扫码加入');
+      if (isHost) setStatus(rememberChannel ? '已记住连接已打开，扫码过的信任设备可直接重连' : '临时连接已打开，等其他设备扫码加入');
       else {
         setStatus('正在连接主机…');
         var c = peer.connect(hostPeerId, { reliable: true });
@@ -587,10 +583,10 @@ function boot() {
     peer.on('connection', function (conn) { setupConn(conn); });
     peer.on('error', function (err) {
       if (err.type === 'unavailable-id') {
-        if (isHost) { alert('这个通道码已被占用（可能你在另一个标签页/窗口也打开了 Kiwi 并记住了同一通道）。请关掉多余的页面，或点「结束会话并换新二维码」。'); setStatus('通道码被占用：可能另一个页面正用同一通道当主机'); }
+        if (isHost) { alert('这个连接码已被占用（可能你在另一个标签页/窗口也打开了 Kiwi 并记住了同一连接）。请关掉多余的页面，或点「结束会话并换新二维码」。'); setStatus('连接码被占用：可能另一个页面正用同一连接当主机'); }
       } else if (err.type === 'peer-unavailable') {
         if (autoProbe) { autoProbeFail(); }
-        else if (!isHost) setStatus('对方未打开页面：主机设备需要先打开 Kiwi 页面，这个通道才能连上。');
+        else if (!isHost) setStatus('对方未打开页面：主机设备需要先打开 Kiwi 页面，这个连接才能连上。');
         else setStatus('有一台离线设备暂时联系不上');
       } else {
         setStatus('连接问题：' + err.type + '（检查网络后刷新页面重试）');
@@ -618,9 +614,9 @@ function boot() {
     var saved = getTrustedHosts().filter(function (h) { return h.room === guestInfo.room; })[0];
     var hostDev = null;
     Object.keys(roster).forEach(function (id) { if (roster[id].peerId === currentHostPeerId) hostDev = roster[id]; });
-    if (hostDev && hostDev.name) return hostDev.name + '（通道 ' + guestInfo.room + '）';
+    if (hostDev && hostDev.name) return hostDev.name + '（连接 ' + guestInfo.room + '）';
     if (saved && saved.hostLabel) return saved.hostLabel;
-    return '通道 ' + guestInfo.room;
+    return '连接 ' + guestInfo.room;
   }
   function showJoinBanner() {
     $('joinBanner').classList.remove('hidden');
@@ -686,7 +682,7 @@ function boot() {
   var scanStream = null, scanRAF = null;
   function startScan() {
     $('scanModal').classList.remove('hidden');
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('scanTip').textContent = '此设备/浏览器不支持摄像头扫码，请用手动输入通道码加入（主机需在线）。'; return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('scanTip').textContent = '此设备/浏览器不支持摄像头扫码，请用手动输入连接码加入（主机需在线）。'; return; }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (stream) {
       scanStream = stream;
       var v = $('scanVideo'); v.srcObject = stream; v.play();
@@ -702,13 +698,13 @@ function boot() {
           if (code) {
             var info = parseRoomPayload(code.data);
             if (info) { stopScan(); joinRoom(info); return; }
-            $('scanTip').textContent = '识别到二维码，但不是 Kiwi 通道码，继续扫描…';
+            $('scanTip').textContent = '识别到二维码，但不是 Kiwi 连接码，继续扫描…';
           }
         }
         scanRAF = requestAnimationFrame(tick);
       };
       tick();
-    }).catch(function () { $('scanTip').textContent = '摄像头打开失败（需要 HTTPS 环境和摄像头权限）。可用手动输入通道码加入。'; });
+    }).catch(function () { $('scanTip').textContent = '摄像头打开失败（需要 HTTPS 环境和摄像头权限）。可用手动输入连接码加入。'; });
   }
   function stopScan() {
     if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null;
@@ -717,18 +713,16 @@ function boot() {
   }
 
   // ----- wire UI -----
-  $('btnShowQR').onclick = showQR;
   $('btnAddDevice').onclick = showQR;
   $('btnCloseQR').onclick = function () { $('qrModal').classList.add('hidden'); };
   $('btnScan').onclick = startScan;
   $('btnCloseScan').onclick = stopScan;
   $('btnManual').onclick = function () {
     var info = parseRoomPayload($('manualCode').value);
-    if (!info) { alert('通道码格式不对'); return; }
-    if (confirm('加入别的通道会离开本机当前通道，确定加入 ' + info.room + ' 吗？')) joinRoom(info);
+    if (!info) { alert('连接码格式不对'); return; }
+    if (confirm('加入别的设备会离开当前连接，确定加入 ' + info.room + ' 吗？')) joinRoom(info);
   };
   $('btnRoom').onclick = function () { $('messages').scrollTo({ top: 0, behavior: 'smooth' }); };
-  $('btnLeave').onclick = leaveToHome;
   $('btnRegen').onclick = function () { if (confirm('结束当前会话并换新二维码？之前扫过旧码的临时设备将需要重新扫码。')) regenerate(); };
   $('btnSkipReconnect').onclick = function () { if (autoProbe) autoProbeFail(); };
   $('btnCopyJoinUrl').onclick = function () {
@@ -740,10 +734,10 @@ function boot() {
     rememberChannel = this.checked;
     if (rememberChannel) {
       setHostChannel({ room: room, secret: secret });
-      setStatus('已记住此通道：以后打开本页就是同一个二维码');
+      setStatus('已记住此连接：以后打开本页就是同一个二维码');
     } else {
       setHostChannel(null);
-      setStatus('已改为临时通道：关掉页面后，下次打开会换新二维码');
+      setStatus('已改为临时连接：关掉页面后，下次打开会换新二维码');
     }
     renderHero();
   };
@@ -788,13 +782,32 @@ function boot() {
     });
   });
 
+  // ----- paste anything: files / images from clipboard (text paste stays native) -----
+  document.addEventListener('paste', function (e) {
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    var files = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind === 'file') { var f = items[i].getAsFile(); if (f) files.push(f); }
+    }
+    if (!files.length) return; // plain text: let the default paste into the field happen
+    e.preventDefault();
+    var renamed = files.map(function (f, idx) {
+      if (f.name && f.name !== 'image.png' && f.name !== 'blob') return f;
+      var ext = ((f.type || '').split('/')[1] || 'bin').replace('jpeg', 'jpg');
+      var d = new Date(); function p(n) { return (n < 10 ? '0' : '') + n; }
+      var nm = '粘贴文件-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + (files.length > 1 ? '-' + (idx + 1) : '') + '.' + ext;
+      try { return new File([f], nm, { type: f.type }); } catch (err) { return f; }
+    });
+    sendFiles(renamed);
+  });
+
   // ----- boot -----
   renderSelf(); renderRoster();
   var hashInfo = parseJoinFromHash(location.hash);
   if (hashInfo) {
     // Arrived by scanning the QR (system camera opened this page URL).
     joinRoom(hashInfo);
-    setStatus('通过扫码打开，正在连接通道 ' + hashInfo.room + '…');
+    setStatus('通过扫码打开，正在连接 ' + hashInfo.room + '…');
   } else if (sessionStorage.getItem('kiwi_skip_autoprobe') === '1') {
     sessionStorage.removeItem('kiwi_skip_autoprobe');
     becomeHostFromStorage();
