@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f7f8f5">
-<title>Kiwi · 网络诊断 / 中转设置</title>
+<title>Kiwi · 网络诊断 / 连接测试</title>
 <style>
   :root { --green:#5b8c3e; --greenDark:#3f6b2a; --line:#e2e6dc; --ink:#2c3327; --muted:#7a8474; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -41,8 +41,8 @@
 </style>
 </head>
 <body>
-<h1>网络诊断 / 中转设置</h1>
-<p class="lead">这个页面用来检查本机能否建立 WebRTC 连接，以及是否拿到了 TURN 中转（<b>relay</b>）候选。手机流量（4G/5G）基本都在运营商 CGNAT 后面，没有中转就很可能一直“正在连接主机…”。</p>
+<h1>网络诊断 / 连接测试</h1>
+<p class="lead">这个页面用来检查本机能否建立 WebRTC 连接。手机 4G/5G 通常在运营商 CGNAT 后面，直连打洞经常失败 —— 但 Kiwi 已内置自动「运营商中转」通道，直连失败会自动切换，<b>不需要你配置 TURN</b>。</p>
 
 <div class="card">
   <h2 style="margin-top:0">1. 当前网络</h2>
@@ -56,12 +56,12 @@
     <button id="btnTest" class="primary">开始检测</button>
     <button id="btnCopy">复制报告</button>
   </div>
-  <p class="hint">检测最多等 9 秒。看到 <b>relay</b> 才算中转可用；只有 <b>srflx</b> 表示只打通了 NAT 发现，5G 下仍可能连不上。</p>
+  <p class="hint">检测最多等 9 秒。看到 <b>relay</b> 说明你的 TURN 可用（可选增强）；只有 <b>srflx</b> 也没关系，Kiwi 会在直连失败时自动走内置中转。</p>
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">2. TURN 中转配置</h2>
-  <p class="hint">每行一个，格式：<code>地址|用户名|密码</code>，例如</p>
+  <h2 style="margin-top:0">2. 可选：TURN 增强（不配置也能用）</h2>
+  <p class="hint">如果你有自建 coturn（或有账号的 TURN），每行一个，格式：<code>地址|用户名|密码</code>，例如</p>
   <p class="hint"><code>turn:global.relay.metered.ca:443|用户名|密码</code><br>
      <code>turn:global.relay.metered.ca:443?transport=tcp|用户名|密码</code><br>
      <code>turns:global.relay.metered.ca:443?transport=tcp|用户名|密码</code></p>
@@ -70,17 +70,17 @@
     <button id="btnSave" class="primary">保存并用于 Kiwi</button>
     <button id="btnClear">清空</button>
   </div>
-  <p class="hint" id="saveTip">保存后主页面（index.html）会自动读取本机这份配置。配置只存在这台设备的浏览器里，不上传。</p>
+  <p class="hint" id="saveTip">保存后主页面（index.html）会自动读取。配置只存在这台设备的浏览器里，不上传；留空就使用内置中转。</p>
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">3. 怎么拿到免费 TURN</h2>
+  <h2 style="margin-top:0">3. 内置中转是怎么工作的？</h2>
   <ol class="steps">
-    <li>注册 Metered（免费额度，约 20GB/月）：<code>metered.ca/stun-turn</code></li>
-    <li>在 Dashboard 的 TURN 页面复制 <b>Username / Credential</b>，地址用 <code>global.relay.metered.ca</code></li>
-    <li>按上面的格式填进来 → 保存 → 回到本页点“开始检测”，确认出现 <b>relay</b></li>
+    <li><b>直连优先</b>：先尝试 STUN 打洞，能直连就不走中转（速度最快）。</li>
+    <li><b>自动切换</b>：打洞失败时自动改走内置「运营商中转」，使用 443 / 8084 端口的 WSS，手机网络基本不会被拦。</li>
+    <li><b>端到端加密</b>：中转帧用 AES-GCM 加密，密钥来自邀请二维码里的配对密钥；公共 broker 只能看到密文。</li>
   </ol>
-  <p class="hint">旧的 <code>openrelay.metered.ca</code> 公开账号已被官方下线（现在解析到 192.0.2.1，等于黑洞），所以之前写死在代码里的中转是完全无效的。</p>
+  <p class="hint">连接成功后主界面会显示「已连接 ✔（运营商中转）」或「已连接 ✔（直连）」，据此判断走的哪条路。旧的 <code>openrelay.metered.ca</code> 公开账号已下线，上面的 TURN 输入框只是给自建服务器用的可选增强。</p>
 </div>
 
 <p><a class="back" href="index.html">← 返回 Kiwi</a></p>
@@ -199,7 +199,7 @@
     var hasTurn = (res.turnCount || 0) > 0;
     if (res.found.relay) return { cls: 'ok', text: '✅ 已拿到 relay：中转可用，手机流量下应该能连上（用时 ' + (res.ms / 1000).toFixed(1) + ' 秒）' };
     if (hasTurn) return { cls: 'err', text: '❌ 配了 ' + res.turnCount + ' 个 TURN，但没拿到 relay：地址/端口/用户名/密码有误，或网络封了 TURN 端口' };
-    return { cls: 'warn', text: '⚠️ 没有配 TURN，只有 STUN。Wi-Fi 下可能能连，5G / 4G 下经常连不上' };
+    return { cls: 'warn', text: 'ℹ️ 没有配置 TURN（可选）。只有 STUN 时 Wi-Fi 通常能直连；手机流量打洞失败时 Kiwi 会自动走内置运营商中转。' };
   }
 
   $('btnTest').onclick = function () {

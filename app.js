@@ -249,6 +249,192 @@ function boot() {
       setTimeout(function () { finish(relayState.hasRelay); }, 6000);
     } catch (e) { finish(false); }
   }
+  // ----- 数据通道：WebRTC 直连优先，打洞失败自动切到「运营商中转」-----
+  // Link 把 PeerJS 的 DataConnection 和 relay.js 的中转通道包成同一个对象，
+  // app 其余逻辑只认 link.open / link.send / link.on / link.dataChannel / link.peerConnection，
+  // 所以文字、文件分片、名单广播都不需要区分走的是哪条路。
+  var links = {};
+  var relayClient = null;
+  var relayAlias = null;   // 主机额外监听「手动连接码」的中转频道（manual:ROOM）
+  var relayStatus = 'off';   // off | connecting | up | unsupported
+  var relayOnly = false;     // 信令服务器完全连不上时，整条会话只走中转
+  var forceRelay = /[?&]relay=1(&|$)/.test(location.search); // 诊断用：?relay=1 强制走中转
+  var routeLabel = '';
+  var peerOpenTimer = null;
+
+  function setRoute(kind) {
+    routeLabel = kind === 'relay' ? '运营商中转' : '直连';
+    if (!isHost && guestInfo && guestAnnounced) setStatus('已连接 ✔（' + routeLabel + '）');
+  }
+
+  function Link(peerId) {
+    var self = this;
+    this.peer = peerId;
+    this.open = false;
+    this.active = null;      // 'p2p' | 'relay'
+    this.usedRelay = false;  // 一旦开始用中转就不再切回直连，避免文件分片乱序
+    this.p2p = null;
+    this.relayCh = null;
+    this.bound = false;
+    this.closedByUser = false;
+    this.relayTimer = null;
+    this.handlers = { open: [], data: [], close: [], error: [] };
+    var dc = {};
+    Object.defineProperty(dc, 'bufferedAmount', { get: function () {
+      if (self.active === 'p2p' && self.p2p && self.p2p.dataChannel) return self.p2p.dataChannel.bufferedAmount || 0;
+      return self.relayCh && !self.relayCh.closed ? self.relayCh.pendingBytes() : 0;
+    } });
+    this._dc = dc;
+  }
+  Link.prototype.on = function (ev, fn) { (this.handlers[ev] || (this.handlers[ev] = [])).push(fn); };
+  Link.prototype.emit = function (ev, a) { var l = this.handlers[ev] || []; for (var i = 0; i < l.length; i++) { try { l[i](a); } catch (e) {} } };
+  Object.defineProperty(Link.prototype, 'peerConnection', { get: function () { return this.p2p ? this.p2p.peerConnection : null; } });
+  Object.defineProperty(Link.prototype, 'dataChannel', { get: function () { return this._dc; } });
+  Object.defineProperty(Link.prototype, 'transport', { get: function () { return this.active; } });
+
+  Link.prototype.attachP2P = function (dc) {
+    var self = this;
+    if (!dc || this.p2p === dc) return;
+    this.p2p = dc;
+    dc.on('open', function () { self.markUp('p2p'); });
+    dc.on('data', function (d) { self.emit('data', d); });
+    dc.on('close', function () { if (self.p2p === dc) { self.p2p = null; self.checkDown(); } });
+    dc.on('error', function (e) { self.emit('error', e); });
+    if (dc.open) this.markUp('p2p');
+  };
+  Link.prototype.attachRelay = function (ch) {
+    var self = this;
+    if (!ch || this.relayCh === ch) return;
+    this.relayCh = ch;
+    ch.on('open', function () { self.markUp('relay'); });
+    ch.on('data', function (d) { self.emit('data', d); });
+    ch.on('close', function () { if (self.relayCh === ch) { self.relayCh = null; self.checkDown(); } });
+    ch.on('error', function () {});
+    if (ch.open) this.markUp('relay');
+  };
+  Link.prototype.markUp = function (kind) {
+    var was = this.open;
+    if (!this.active) this.active = kind;
+    else if (this.active === 'relay' && kind === 'p2p' && !this.usedRelay) this.active = 'p2p';
+    this.open = true;
+    if (!was) { setRoute(this.active); this.emit('open'); }
+  };
+  Link.prototype.checkDown = function () {
+    if (this.p2p || (this.relayCh && !this.relayCh.closed)) return;
+    if (!this.open) return;
+    this.open = false;
+    this.active = null;
+    this.emit('close');
+  };
+  // 发送：已经在用中转就一直用中转（保证分片顺序），否则优先直连。
+  Link.prototype.send = function (data) {
+    if (this.active === 'relay' && this.relayCh && !this.relayCh.closed) { this.relayCh.send(data); return; }
+    if (this.p2p && this.p2p.open) { this.p2p.send(data); return; }
+    if (this.relayCh && !this.relayCh.closed) { this.usedRelay = true; this.relayCh.send(data); return; }
+    throw new Error('通道已关闭');
+  };
+  Link.prototype.close = function () {
+    this.closedByUser = true;
+    clearTimeout(this.relayTimer);
+    var p2p = this.p2p, ch = this.relayCh;
+    this.p2p = null; this.relayCh = null;
+    try { if (p2p) p2p.close(); } catch (e) {}
+    try { if (ch) ch.close(); } catch (e) {}
+    this.checkDown();
+  };
+  Link.prototype.startRelay = function (delay) {
+    var self = this;
+    if (this.relayCh && !this.relayCh.closed) return;
+    clearTimeout(this.relayTimer);
+    this.relayTimer = setTimeout(function () {
+      if (self.closedByUser) return;
+      if (self.open && self.active === 'p2p' && !forceRelay) return; // 直连已经好了，不用中转
+      var r = ensureRelay();
+      if (!r) { if (!self.closedByUser && (!self.open || forceRelay)) self.startRelay(1500); return; }
+      if (!self.relayCh || self.relayCh.closed) self.attachRelay(r.channel(self.peer));
+    }, delay == null ? 0 : delay);
+  };
+
+  function getLink(peerId) {
+    var l = links[peerId];
+    if (!l) { l = new Link(peerId); links[peerId] = l; }
+    return l;
+  }
+
+  // ----- 中转客户端（公共 MQTT-over-WSS，AES-GCM 端到端加密，帧级确认 + 重传）-----
+  function relaySelfId() {
+    if (isHost && room) return hostPeerIdForRoom(room);
+    if (me.peerId) return me.peerId;
+    var v = sessionStorage.getItem('kiwi_relay_id');
+    if (!v) { v = 'r-' + randomCode(12, 'abcdefghijklmnopqrstuvwxyz0123456789'); sessionStorage.setItem('kiwi_relay_id', v); }
+    return v;
+  }
+  function makeRelayClient(sec, primary) {
+    return new window.KiwiRelay({
+      room: room, secret: sec, selfId: relaySelfId(),
+      onStatus: function (s) { if (primary) relayStatus = s; },
+      onPeer: function (peerId, ch) {
+        var l = getLink(peerId);
+        if (!l.bound) bindLink(l, {});
+        l.attachRelay(ch);
+      }
+    });
+  }
+  function ensureRelay() {
+    if (typeof window.KiwiRelay !== 'function' || !room || !secret) return null;
+    var sid = relaySelfId();
+    if (!relayClient || relayClient.selfId !== sid || relayClient.room !== room || relayClient.secret !== secret || relayClient.stopped) {
+      if (relayClient) { try { relayClient.stop(); } catch (e) {} }
+      relayClient = makeRelayClient(secret, true);
+    }
+    // 手动只输入房间码时，来宾用的是 manual:ROOM 派生密钥；主机必须额外订阅这条频道，
+    // 否则信令服务器被运营商拦截时，手动连接码无法自动切到中转。
+    if (isHost && secret.indexOf('manual:') !== 0) {
+      var ms = 'manual:' + room;
+      if (!relayAlias || relayAlias.selfId !== sid || relayAlias.room !== room || relayAlias.secret !== ms || relayAlias.stopped) {
+        if (relayAlias) { try { relayAlias.stop(); } catch (e) {} }
+        relayAlias = makeRelayClient(ms, false);
+      }
+    } else if (relayAlias) {
+      try { relayAlias.stop(); } catch (e) {}
+      relayAlias = null;
+    }
+    return relayClient;
+  }
+  function stopRelay() {
+    if (relayClient) { try { relayClient.stop(); } catch (e) {} }
+    if (relayAlias) { try { relayAlias.stop(); } catch (e) {} }
+    relayClient = null;
+    relayAlias = null;
+    relayStatus = 'off';
+  }
+
+  // 统一拨号：先试 WebRTC 直连；delay 毫秒后直连还没握手成功就同时接上中转通道，谁先通就用谁。
+  function dial(peerId, opts) {
+    opts = opts || {};
+    var l = getLink(peerId);
+    l.closedByUser = false;
+    if (!l.bound) bindLink(l, opts);
+    conns[peerId] = l;
+    if (!opts.noP2P && !relayOnly && !forceRelay && !l.open && !l.p2p && !/^r-/.test(peerId) && peer && !peer.destroyed) {
+      try { l.attachP2P(peer.connect(peerId, { reliable: true })); } catch (e) {}
+    }
+    if (!opts.noRelay && !l.open) l.startRelay((forceRelay || opts.noP2P) ? 0 : (opts.relayDelay == null ? 2500 : opts.relayDelay));
+    return l;
+  }
+
+  // 信令服务器（0.peerjs.com）被移动网络拦住时的兜底：整条会话只走中转，不再干等 PeerJS。
+  function goRelayOnly() {
+    if (relayOnly || isHost || me.peerId || !guestInfo || guestAnnounced) return;
+    if (!ensureRelay()) return;
+    relayOnly = true;
+    clearTimeout(peerOpenTimer);
+    me.peerId = relaySelfId();
+    roster = {}; roster[deviceId] = publicMe();
+    enterRoomUI(); renderSelf(); renderRoster();
+    guestDialTries = 0;
+    dialHost();
+  }
   function joinUrl() { return buildJoinUrl(location.href, room, secret); }
 
   function escapeHtml(s) {
@@ -400,19 +586,23 @@ function boot() {
       done: function (t) { this.pct.textContent = t || '完成'; var self = this; setTimeout(function () { self.box.remove(); }, 4000); } };
   }
 
-  // ----- PeerJS plumbing -----
-  function setupConn(conn, opts) {
+  // ----- PeerJS plumbing（Link 统一封装 直连 / 运营商中转 两种通道）-----
+  function bindLink(link, opts) {
     opts = opts || {};
-    conns[conn.peer] = conn;
-    conn.on('open', function () {
-      if (opts.registerOnOpen) { hostReviveTries = 0; conn.send({ kind: 'register', secret: secret, device: publicMe() }); }
-      else conn.send({ kind: 'hello', device: publicMe() });
-      reportPath(conn);
+    link.bound = true;
+    conns[link.peer] = link;
+    link.on('open', function () {
+      if (!link.open) return;
+      try {
+        if (opts.registerOnOpen) { hostReviveTries = 0; link.send({ kind: 'register', secret: secret, device: publicMe() }); }
+        else link.send({ kind: 'hello', device: publicMe() });
+      } catch (e) {}
+      reportPath(link);
     });
-    conn.on('data', function (data) { onData(conn, data); });
-    conn.on('close', function () { onConnClose(conn); });
-    conn.on('error', function () { /* surfaced via peer error */ });
-    return conn;
+    link.on('data', function (data) { onData(link, data); });
+    link.on('close', function () { onConnClose(link); });
+    link.on('error', function () { /* surfaced via peer error */ });
+    return link;
   }
   function onConnClose(conn) {
     var did = connDevice[conn.peer];
@@ -440,6 +630,10 @@ function boot() {
   // with it — the fastest way to see whether a carrier-network connection went through the relay.
   function reportPath(conn) {
     try {
+      if (conn && conn.transport === 'relay') {
+        if (!isHost && conn.peer === currentHostPeerId && guestAnnounced) setStatus('已连接 ✔（运营商中转）');
+        return;
+      }
       var pc = conn.peerConnection;
       if (!pc || !pc.getStats) return;
       setTimeout(function () {
@@ -465,18 +659,16 @@ function boot() {
       if (!peer || peer.destroyed) return;
       if (!isHost && guestInfo && closedPeerId === currentHostPeerId && hostReviveTries < 8 && !conns[currentHostPeerId]) {
         hostReviveTries++;
-        try { var c = peer.connect(currentHostPeerId, { reliable: true }); setupConn(c, { registerOnOpen: true }); } catch (e) {}
+        try { dial(currentHostPeerId, { registerOnOpen: true }); } catch (e) {}
       }
       flushAllPending();
     }, 4000);
   }
   function ensureConn(peerId) {
     if (!peerId || peerId === me.peerId) return null;
-    var c = conns[peerId];
-    if (c) return c; // open or still connecting; senders await open via waitOpen
-    c = peer.connect(peerId, { reliable: true });
-    setupConn(c);
-    return c;
+    var l = conns[peerId];
+    if (l) return l; // open or still connecting; senders await open via waitOpen
+    return dial(peerId, { relayDelay: 3000 });
   }
   function waitOpen(conn) {
     return new Promise(function (res, rej) {
@@ -514,7 +706,7 @@ function boot() {
 
   // ----- Host: roster authority -----
   function hostHandleRegister(conn, data) {
-    var okSecret = data.secret === secret || (typeof data.secret === 'string' && data.secret.indexOf('manual:') === 0);
+    var okSecret = data.secret === secret || (typeof data.secret === 'string' && data.secret === 'manual:' + room);
     if (!okSecret) { try { conn.send({ kind: 'text', msgId: 'sys-' + Date.now(), text: '⚠️ 配对密钥不正确，未能加入。', from: publicMe(), ts: Date.now() }); } catch (e) {} return; }
     var d = data.device; if (!d || !d.deviceId) return;
     d.peerId = conn.peer;
@@ -541,7 +733,7 @@ function boot() {
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) ensureConn(roster[id].peerId); });
     // If we are a guest, the first roster means the auto-reconnect / join worked.
     if (!isHost && autoProbe) { autoProbeSuccess(); }
-    else if (!isHost && guestInfo && !guestAnnounced) { guestAnnounced = true; guestDialTries = 0; setStatus('已连接 ✔'); }
+    else if (!isHost && guestInfo && !guestAnnounced) { guestAnnounced = true; guestDialTries = 0; setStatus('已连接 ✔' + (routeLabel ? '（' + routeLabel + '）' : '')); }
     if (!isHost && guestInfo) updateTrustBannerLabel();
     Object.keys(roster).forEach(function (id) { if (id !== deviceId && roster[id].online !== false) flushForDevice(id); });
   }
@@ -846,43 +1038,55 @@ function boot() {
   function dialHost() {
     setStatus('正在连接主机…');
     clearTimeout(guestStallTimer);
-    guestStallTimer = setTimeout(onGuestStall, 15000);
-    var c = peer.connect(currentHostPeerId, { reliable: true });
-    setupConn(c, { registerOnOpen: true });
+    guestStallTimer = setTimeout(onGuestStall, forceRelay ? 12000 : 15000);
+    dial(currentHostPeerId, { registerOnOpen: true, noP2P: relayOnly });
   }
-  // A dial that never opens usually means the direct path is blocked: retry a couple of times
-  // (fresh ICE candidates each round give the relay a chance to allocate), then explain.
+  // 拨号迟迟不成功，通常就是直连被运营商网络挡了：重拨两次，然后自动改走内置中转。
   function onGuestStall() {
-    if (isHost || guestAnnounced || !guestInfo || !peer || peer.destroyed) return;
+    if (isHost || guestAnnounced || !guestInfo) return;
+    if (!relayOnly && (!peer || peer.destroyed)) return;
     guestDialTries++;
     if (guestDialTries <= 2) {
       var old = conns[currentHostPeerId];
-      if (old && !old.open) { try { old.close(); } catch (e) {} delete conns[currentHostPeerId]; old = null; }
-      if (!old) {
-        setStatus('正在连接主机…（第 ' + (guestDialTries + 1) + ' 次尝试）');
-        var c = peer.connect(currentHostPeerId, { reliable: true });
-        setupConn(c, { registerOnOpen: true });
-      }
+      if (old && !old.open) { try { old.close(); } catch (e) {} delete conns[currentHostPeerId]; }
+      setStatus('正在连接主机…（第 ' + (guestDialTries + 1) + ' 次尝试）');
+      dial(currentHostPeerId, { registerOnOpen: true, noP2P: relayOnly });
       clearTimeout(guestStallTimer);
-      guestStallTimer = setTimeout(onGuestStall, 15000);
+      guestStallTimer = setTimeout(onGuestStall, 12000);
+      return;
+    }
+    // 直连打洞失败（手机 4G/5G 的典型情况）：自动改走运营商中转，不需要用户配置任何东西。
+    var r = ensureRelay();
+    if (!r) {
+      setStatus('连不上：浏览器不支持中转通道，请换新版 Chrome / Safari / Edge');
+      return;
+    }
+    var ln = getLink(currentHostPeerId);
+    if (!ln.bound) bindLink(ln, { registerOnOpen: true });
+    conns[currentHostPeerId] = ln;
+    if (!ln.relayCh || ln.relayCh.closed) ln.attachRelay(r.channel(currentHostPeerId));
+    if (guestDialTries <= 8) {
+      setStatus(relayStatus === 'up' ? '正在通过运营商中转连接…' : '直连打洞失败，正在建立中转通道…');
+      clearTimeout(guestStallTimer);
+      guestStallTimer = setTimeout(onGuestStall, 12000);
     } else {
-      if (!relayState.turnCount) {
-        setStatus('连不上：没有配置中转服务器（TURN）。手机流量下双方常常无法直连，请点左下「网络诊断」配置 TURN');
-      } else if (relayState.checked && !relayState.hasRelay) {
-        setStatus('连不上：中转服务器连不上（TURN 不可用），请到「网络诊断」检查地址 / 用户名 / 密码');
-      } else {
-        setStatus('连接有点久：确认对方页面开着、连接码一致；仍不行就到「网络诊断」检查中转');
-      }
+      setStatus('连不上：确认对方页面开着、连接码一致（已尝试直连 + 中转）');
     }
   }
   function startPeer(fixedId, hostPeerId) {
     if (peer) { try { peer.destroy(); } catch (e) {} }
-    conns = {}; connDevice = {};
+    stopRelay();
+    links = {}; conns = {}; connDevice = {};
+    relayOnly = false;
+    clearTimeout(peerOpenTimer);
     if (!isHost) { roster = {}; roster[deviceId] = publicMe(); }
     peer = fixedId ? new Peer(fixedId, PEER_OPTS) : new Peer(PEER_OPTS);
     peer.on('open', function (id) {
       signalDrops = 0;
+      clearTimeout(peerOpenTimer);
+      if (relayOnly) { ensureRelay(); return; } // 已经切到纯中转，身份用中转 id，别被 PeerJS 的 id 覆盖
       me.peerId = id;
+      ensureRelay(); // 两端都尽早订阅中转频道，直连失败时能立刻接上
       if (roster[deviceId]) roster[deviceId].peerId = id; else roster[deviceId] = publicMe();
       enterRoomUI(); renderSelf(); renderRoster();
       if (isHost) setStatus(rememberChannel ? '已记住连接已打开，扫码过的信任设备可直接重连' : '临时连接已打开，等其他设备扫码加入');
@@ -891,7 +1095,15 @@ function boot() {
         dialHost();
       }
     });
-    peer.on('connection', function (conn) { setupConn(conn); });
+    peer.on('connection', function (conn) {
+      var l = getLink(conn.peer);
+      if (!l.bound) bindLink(l, {});
+      l.attachP2P(conn);
+    });
+    if (!isHost) {
+      // 手机流量下 0.peerjs.com 偶尔完全连不上：12 秒还没拿到信令 id 就直接走中转。
+      peerOpenTimer = setTimeout(goRelayOnly, 12000);
+    }
     peer.on('error', function (err) {
       var type = (err && err.type) || 'unknown';
       if (type === 'unavailable-id') {
@@ -903,7 +1115,8 @@ function boot() {
       } else if (type === 'browser-incompatible') {
         setStatus('这个浏览器不支持 WebRTC，请换新版的 Chrome / Safari / Edge');
       } else if (type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed' || type === 'ssl-unavailable') {
-        // 信令服务器连不上：移动网络拦截 0.peerjs.com 时常见
+        // 信令服务器连不上：移动网络拦截 0.peerjs.com 时常见 → 直接改走内置中转
+        if (!isHost && !me.peerId) { goRelayOnly(); if (relayOnly) return; }
         setStatus('连不上信令服务器（0.peerjs.com 可能被网络拦截），正在自动重试…');
         setTimeout(function () { if (peer && !peer.destroyed && peer.disconnected) { try { peer.reconnect(); } catch (e) {} } }, 2500);
       } else if (type === 'webrtc') {
@@ -1202,7 +1415,7 @@ function boot() {
         return;
       }
       if (!isHost && guestInfo && currentHostPeerId && !conns[currentHostPeerId]) {
-        try { var c = peer.connect(currentHostPeerId, { reliable: true }); setupConn(c, { registerOnOpen: true }); } catch (e) {}
+        try { dial(currentHostPeerId, { registerOnOpen: true }); } catch (e) {}
       }
       flushAllPending();
     }, 900);
