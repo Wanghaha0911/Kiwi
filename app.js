@@ -608,7 +608,10 @@ function boot() {
     var did = connDevice[conn.peer];
     delete conns[conn.peer];
     delete connDevice[conn.peer];
-    if (isHost && did && did !== deviceId) {
+    // 同一设备可能已经用新会话重新注册（旧通道要 75 秒后才会超时断开），此时不能删掉新记录。
+    var reRegistered = false;
+    if (isHost && did) Object.keys(connDevice).forEach(function (pid) { if (connDevice[pid] === did && conns[pid]) reRegistered = true; });
+    if (isHost && did && did !== deviceId && !reRegistered) {
       // Host roster: trusted guests stay listed (greyed/offline); temp guests vanish.
       if (getHostTrustedGuests()[did] && roster[did]) roster[did].online = false;
       else delete roster[did];
